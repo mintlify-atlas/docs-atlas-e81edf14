@@ -219,7 +219,7 @@ Three scheduled jobs run inside `sco_api`, defined in `src/index.ts` using `node
 cron.schedule('0 6 * * *', ...)
 ```
 
-Calls `ExchangeRateService.updateExchangeRate()`, which fetches the current official USD/BsS rate from the **BCV (Banco Central de Venezuela)** and writes it to `AutoLavado.currentTasaBs` and `AutoLavado.lastTasaUpdate`. The same fetch runs once at server startup via `initializeApp()` to ensure a fresh rate is always available.
+Calls `ExchangeRateService.updateExchangeRate()`, which makes two parallel requests to **dolarapi** (`ve.dolarapi.com`) — one for the official USD/BsS rate and one for the official EUR/BsS rate. Both values are written atomically to `AutoLavado.currentTasaBs`, `AutoLavado.currentTasaEurBs`, and `AutoLavado.lastTasaUpdate`. The same fetch runs once at server startup via `initializeApp()` to ensure fresh rates are always available from the first request.
 
 ### 2. Laundrer Shift Reset — Midnight
 

@@ -1,7 +1,7 @@
 ---
-title: "Sales and Invoicing API Endpoints"
+title: "Sales and Invoicing API Reference — SCO Autolavados"
 sidebarTitle: "Sales"
-description: "REST endpoints for SCO Autolavados sales records — retrieve the full invoice history and create finalized sales with multi-currency totals and line-item details."
+description: "REST endpoints for SCO Autolavados sales — retrieve the full invoice history and create finalized sales with line-item detail and inventory updates."
 ---
 
 Sales records represent finalized invoices in SCO Autolavados. Each sale captures the USD exchange rate at the moment of transaction, links to an approved payment, and contains one or more line items — either completed service orders or physical products sold from inventory. Creating a sale atomically decrements inventory for any product line items.
@@ -14,11 +14,10 @@ Sales records represent finalized invoices in SCO Autolavados. Each sale capture
 
 Retrieve the full invoice history ordered by date descending. Each sale includes its nested line items (`salesDetails`) and the cashier (`user`) who registered it. If the sale is linked to a payment, the payment and customer details are also included.
 
-**Authentication:** Requires a valid JWT token (any authenticated role).
+**Authentication:** Public — no token required.
 
 ```bash
-curl http://localhost:3000/api/sales \
-  -H "Authorization: Bearer <YOUR_TOKEN>"
+curl http://localhost:3000/api/sales
 ```
 
 **Response 200 — Array of Sale objects:**
@@ -164,23 +163,34 @@ curl -X POST http://localhost:3000/api/sales \
   "totalUsd": 7.5,
   "paymentId": "p1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "userId": "u1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "user": { "name": "Admin", "lastName": "Sistema" },
   "salesDetails": [
     {
+      "id": "d1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "cant": 1,
       "UPriceUsd": 5.0,
+      "saleId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "serviceOrderId": "so1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "itemId": null
     },
     {
+      "id": "d2b2c3d4-e5f6-7890-abcd-ef1234567890",
       "cant": 1,
       "UPriceUsd": 2.5,
+      "saleId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "serviceOrderId": null,
       "itemId": "i1b2c3d4-e5f6-7890-abcd-ef1234567890"
     }
   ]
 }
 ```
+
+<Note>
+  The POST response includes only the `salesDetails` nested array — it does
+  **not** include the `user` or `payment` relations. Those expanded fields are
+  only returned by `GET /api/sales`, which uses a wider `include` query. To
+  display cashier or customer details after creating a sale, issue a subsequent
+  GET request.
+</Note>
 
 **Error responses:**
 

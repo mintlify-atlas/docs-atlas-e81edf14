@@ -1,7 +1,7 @@
 ---
-title: "Payments, Sales, and the Multi-Currency POS"
+title: "Payments, Sales, and Multi-Currency POS — SCO Autolavados"
 sidebarTitle: "Payments & Sales"
-description: "SCO Autolavados supports multi-currency point-of-sale transactions in USD and Bolívares. Payments require admin approval before generating an immutable Sales invoice."
+description: "Record multi-currency payments in USD and Bolívares. Manage customer orders, approve transactions, and generate immutable Sales invoices via the POS."
 ---
 
 SCO Autolavados is built for the Venezuelan financial reality: every transaction can be recorded in US Dollars, Bolívares, or a combination of both. The platform uses a two-step payment-then-sale workflow. A payment record is registered first and goes through an optional admin approval gate before a final, immutable sales invoice is generated. This separation allows admins to verify that funds actually landed in the bank account before the transaction is considered complete.
@@ -22,6 +22,17 @@ The following payment methods are supported:
 <Warning>
   When `method` is `"binance"`, the `mountBS` field must be `0`. Submitting a non-zero `mountBS` with a Binance payment will return a validation error: `"Los pagos por Binance solo permiten USD (el monto en Bs debe ser 0)"`.
 </Warning>
+
+## Listing Payments
+
+Retrieve all payment records, ordered by date descending. Each record includes the nested `customer` object.
+
+```http
+GET /api/payments
+Authorization: Bearer <token>
+```
+
+**Response (200):** Array of `Payment` objects with customer details. This endpoint requires a valid JWT but is not restricted to Admin-only — any authenticated user can access it.
 
 ## Step 1 — Register a Payment
 
@@ -141,7 +152,27 @@ The following is the full happy-path flow from vehicle arrival to invoice genera
 
 Customers can initiate their own purchase orders directly from the web app without going through the reception counter. This flow supports both service bookings and product purchases.
 
-**Create an order (CUSTOMER role required):**
+### Listing Orders
+
+**Admin — all orders:**
+
+```http
+GET /api/customer/orders
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+Returns every `OrderCustomers` record in the system with full details (customer info, payment, and line items).
+
+**Customer — own orders only:**
+
+```http
+GET /api/customer/orders/my
+Authorization: Bearer <TOKEN_CUSTOMER>
+```
+
+Returns only the orders belonging to the authenticated customer. This endpoint requires the `CUSTOMER` role.
+
+### Create an Order (CUSTOMER role required)
 
 ```http
 POST /api/customer/orders
@@ -151,19 +182,23 @@ Content-Type: application/json
 
 ```json
 {
+  "carId": "<ID_VEHICULO>",
   "details": [
     {
       "itemId": "<ID_AMBIENTADOR_PINO>",
-      "cant": 1,
-      "UPriceUsd": 2.5
+      "cant": 1
+    },
+    {
+      "serviceId": "<ID_LAVADO_COMPLETO>",
+      "cant": 1
     }
   ]
 }
 ```
 
-The order is created with `status: "PENDING"` and inventory is decremented immediately. If insufficient stock exists, the entire request is rejected with a `500` error.
+Each detail entry must include either `itemId` or `serviceId` and a `cant` (quantity). `carId` is required when any detail contains a `serviceId`. Unit prices are resolved server-side from the item/service catalogue — do not send `UPriceUsd` in the request body. The order is created with `status: "PENDING"` and inventory is decremented immediately at order creation. If insufficient stock exists, the entire transaction is rolled back with an error.
 
-**Pay for the order:**
+### Pay for an Order
 
 ```http
 POST /api/customer/orders/:id/pay
@@ -179,7 +214,37 @@ Content-Type: application/json
 }
 ```
 
-The order advances to `PAID` status and a payment record is linked to the order.
+A `Payment` record is created and linked to the order via `paymentId`. The order's `status` remains `PENDING` at this stage — it must still be approved by an Admin.
+
+### Approve an Order (ADMIN only)
+
+Once the admin verifies the payment and confirms the order:
+
+```http
+PATCH /api/customer/orders/:id/approve
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "tazaUsd": 622.21,
+  "methodPayment": "Pago Movil"
+}
+```
+
+This creates a `Sales` invoice record, updates the order status to `APPROVED`, and finalizes the transaction. The order must have a `paymentId` set and must be in `PENDING` status — attempting to approve an already-approved order returns a `400` error.
+
+### Reject an Order (ADMIN only)
+
+If the payment is not valid or the order cannot be fulfilled:
+
+```http
+DELETE /api/customer/orders/:id/reject
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+This rolls back the order: inventory decremented at creation is restored, any associated service orders are marked `CANCELLED`, and the order status is set to `REJECTED`. The order must be in `PENDING` status to be rejected.
 
 ## Expenses
 

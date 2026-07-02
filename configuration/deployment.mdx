@@ -1,7 +1,7 @@
 ---
 title: "Deploy SCO Autolavados with Docker Compose"
 sidebarTitle: "Deployment"
-description: "Step-by-step guide to deploying SCO Autolavados using Docker Compose, including database setup, migrations, seeding, and verifying service health."
+description: "How to deploy SCO Autolavados with Docker Compose: service overview, environment setup, running Prisma migrations, and verifying the stack is healthy."
 ---
 
 SCO Autolavados ships as a fully containerized application. All three tiers — the PostgreSQL database, the Express/Prisma backend, and the React/Vite frontend — run as isolated Docker Compose services that share a private internal network. A single `docker compose up --build` command brings the entire stack online, and a named Docker volume ensures your data survives container restarts and rebuilds.
@@ -88,20 +88,14 @@ The backend Dockerfile installs dependencies, copies source files, runs `npx pri
     Once the containers are running, apply the Prisma migration history to create all tables in the `sco_db` database:
 
     ```bash
-    docker compose exec backend npx prisma migrate deploy
+    docker compose exec backend npx prisma migrate deploy --schema=../prisma/schema.prisma
     ```
 
-    This command runs inside the `sco_api` container and executes all pending migrations in `backend/prisma/migrations` against the live PostgreSQL instance.
-  </Step>
+    The `--schema` flag is required because the container's working directory is set to `/usr/src/app/src` in `docker-compose.yml`, so Prisma must be pointed one level up to find `prisma/schema.prisma`. This command executes all pending migrations in `backend/prisma/migrations` against the live PostgreSQL instance.
 
-  <Step title="Seed initial data">
-    Populate the database with seed data (roles, default configuration, etc.):
-
-    ```bash
-    docker compose exec backend npx prisma db seed
-    ```
-
-    The seed script is defined in `backend/package.json` under the `prisma.seed` key. On first boot, `initializeApp()` in `src/index.ts` also creates the `AutoLavado` record automatically if none exists.
+    <Note>
+      On first boot, `initializeApp()` in `src/index.ts` automatically creates the `AutoLavado` record if none exists, so no separate seed step is needed.
+    </Note>
   </Step>
 
   <Step title="Verify services are healthy">
@@ -111,7 +105,7 @@ The backend Dockerfile installs dependencies, copies source files, runs `npx pri
     curl http://localhost:3000/api/autolavado
     ```
 
-    A successful response returns the `AutoLavado` entity JSON, confirming that the database connection, migrations, and seed data are all working correctly. The frontend is accessible at `http://localhost:5173`.
+    A successful response returns the `AutoLavado` entity JSON, confirming that the database connection and migrations are working correctly. The frontend is accessible at `http://localhost:5173`.
   </Step>
 </Steps>
 
@@ -161,7 +155,7 @@ To deploy new code after the initial setup:
 
   <Step title="Apply any new migrations">
     ```bash
-    docker compose exec backend npx prisma migrate deploy
+    docker compose exec backend npx prisma migrate deploy --schema=../prisma/schema.prisma
     ```
 
     Run this after every update that includes new Prisma migration files. It is safe to run even when there are no new migrations.
@@ -177,7 +171,7 @@ Prisma Studio provides a browser-based GUI for inspecting and editing database r
 To launch a Prisma Studio session manually:
 
 ```bash
-docker compose exec backend npx prisma studio
+docker compose exec backend npx prisma studio --browser none --port 51212
 ```
 
 <Info>
@@ -195,15 +189,15 @@ docker compose logs -f backend
 # Restart only the API service (without rebuilding)
 docker compose restart backend
 
-# Open a Prisma Studio session
-docker compose exec backend npx prisma studio
+# Open a Prisma Studio session (available at http://localhost:5555)
+docker compose exec backend npx prisma studio --browser none --port 51212
 
 # Open a psql session directly in the database container
 docker compose exec db psql -U sco_user -d sco_db
 
 # Reset the database — runs all migrations from scratch
 # WARNING: this destroys ALL data in the database
-docker compose exec backend npx prisma migrate reset
+docker compose exec backend npx prisma migrate reset --schema=../prisma/schema.prisma
 
 # Check the status of all running containers
 docker compose ps

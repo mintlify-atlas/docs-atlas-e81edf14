@@ -1,10 +1,10 @@
 ---
-title: "Service Queue and Operations Management"
+title: "Service Order Queue and Operations — SCO Autolavados"
 sidebarTitle: "Service Orders"
-description: "Manage the real-time car wash queue in SCO Autolavados — create service orders, assign laundrers, track status from EN_ESPERA to FINALIZADO, and calculate estimated wait time."
+description: "Create and manage service orders in SCO Autolavados — queue vehicles, assign laundrers, and track states from EN_ESPERA through LAVANDO to FINALIZADO."
 ---
 
-Service orders are the operational core of SCO Autolavados. Every vehicle that enters the car wash generates a service order that flows through a three-state lifecycle — from the moment it joins the queue at reception, through the active wash, to final completion. The service order record ties together the vehicle, the customer, the assigned laundrer, and the service performed, creating a traceable audit trail used for productivity tracking, payroll calculation, and sales invoicing.
+Service orders are the operational core of SCO Autolavados. Every vehicle that enters the car wash generates a service order that progresses through a state lifecycle — from the moment it joins the queue at reception, through the active wash, to final completion. The `state` field is a free string, but the four canonical values used by the system are `EN_ESPERA` (manually queued by admin), `PENDIENTE` (auto-queued from a confirmed reservation), `LAVANDO` (wash in progress), and `FINALIZADO` (complete). The service order record ties together the vehicle, the customer, the assigned laundrer, and the service performed, creating a traceable audit trail used for productivity tracking, payroll calculation, and sales invoicing.
 
 ## Order Lifecycle
 
@@ -125,6 +125,8 @@ The `isWorkingToday` flag on the `User` record determines whether a laundrer:
 | `POST` | `/api/service-orders` | Admin | Create new order and add to queue |
 | `PATCH` | `/api/service-orders/:id/start` | Admin | Assign laundrer, transition to `LAVANDO` |
 | `PATCH` | `/api/service-orders/:id/finish` | Admin | Complete order, record `timeEnd` |
+| `PATCH` | `/api/service-orders/:id/state` | Admin | Set an arbitrary state string on an order |
+| `DELETE` | `/api/service-orders/:id` | Admin | Permanently delete a service order record |
 | `PATCH` | `/api/laundrers/:id/shift/start` | Admin | Clock laundrer in for the day |
 | `PATCH` | `/api/laundrers/:id/shift/end` | Admin | Clock laundrer out |
 | `GET` | `/api/service-orders` | Admin | List all orders with filters |

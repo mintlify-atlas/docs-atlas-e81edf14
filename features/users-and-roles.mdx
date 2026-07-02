@@ -1,7 +1,7 @@
 ---
 title: "Users, Roles, and Authentication in SCO Autolavados"
 sidebarTitle: "Users & Roles"
-description: "SCO Autolavados uses three roles — Admin, Customer, and Laundrer — each with distinct creation flows, permissions, and access levels enforced via JWT middleware."
+description: "Three roles — Admin, Customer, and Laundrer — govern access in SCO Autolavados, each with distinct creation flows and JWT-enforced permissions."
 ---
 
 SCO Autolavados enforces a strict role-based access control (RBAC) model across every layer of the platform. Three distinct roles govern what each actor can see and do — from full administrative control down to purely operational, credential-free laundrer records. Every protected API route validates the caller's role from a signed JWT before executing any business logic.
@@ -139,6 +139,70 @@ Authorization: Bearer <token>
 ```
 
 **Error (401):** Returned for invalid credentials, unactivated accounts (no password set), or inactive users.
+
+### Token Refresh
+
+Access tokens expire after 15 minutes. Exchange a valid refresh token for a new access token without re-authenticating:
+
+```http
+POST /api/users/refresh
+Content-Type: application/json
+```
+
+```json
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**Error (401):** Returned if the refresh token is invalid, expired, or does not have `isRefresh: true` in its payload. The user must log in again to obtain a new token pair.
+
+## Listing Users
+
+`GET /api/users` is restricted to the **Admin** role. It returns a paginated list of all users with their role information included.
+
+```http
+GET /api/users?cant=10&page=1
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+| Query Param | Default | Description |
+|-------------|---------|-------------|
+| `cant` | `10` | Records per page |
+| `page` | `1` | Page number (1-based) |
+
+**Response (200):**
+
+```json
+{
+  "users": [
+    {
+      "id": "uuid",
+      "name": "Juan",
+      "lastName": "Perez",
+      "cedula": "V12345678",
+      "role": { "id": "uuid", "name": "CUSTOMER" }
+    }
+  ],
+  "total": 42
+}
+```
+
+To retrieve all users that belong to a specific role, use:
+
+```http
+GET /api/users/role/:roleName
+```
+
+This endpoint is unauthenticated. The `roleName` parameter is case-insensitive — `CUSTOMER`, `Customer`, and `customer` all return the same results.
 
 ## Cedula Auto-Complete
 

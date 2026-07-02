@@ -1,7 +1,7 @@
 ---
-title: "Payroll and Laundrer Commission Calculation"
+title: "Payroll and Laundrer Commissions in SCO Autolavados"
 sidebarTitle: "Payroll"
-description: "SCO Autolavados calculates daily laundrer commissions via a pool system. Admins can view and export payroll for any date using the GET /api/payroll/daily endpoint."
+description: "SCO Autolavados splits daily wash revenue into a commission pool for laundrers. Admins calculate and record payroll per day using GET /api/payroll/daily."
 ---
 
 SCO Autolavados calculates laundrer compensation using a **commission pool (pozo)** model. Instead of per-order tips or fixed salaries, all revenue from completed service orders is pooled together. A configurable percentage of that pool becomes the shared commission, which is then split equally among all laundrers who clocked in on that day. This model aligns incentives — laundrers benefit collectively from a busy day — and simplifies end-of-day accounting to a single API call.
@@ -124,7 +124,7 @@ If no laundrers were active on the requested day, the API returns:
 After reviewing the payroll summary, the admin can record the commission payout as an expense:
 
 ```http
-POST /api/payroll/register
+POST /api/payroll/pay
 Authorization: Bearer <ADMIN_TOKEN>
 Content-Type: application/json
 ```
@@ -150,11 +150,12 @@ Content-Type: application/json
 ```json
 {
   "commissionPercent": 35,
-  "commissionType": "BASE_SERVICE"
+  "commissionType": "BASE_SERVICE",
+  "payrollPeriod": "DAILY"
 }
 ```
 
-Changes take effect immediately for the next payroll calculation. Historical payroll data is not retroactively recalculated.
+The `payrollPeriod` field accepts `"DAILY"` or `"WEEKLY"` and defaults to `"DAILY"`. Changes take effect immediately for the next payroll calculation. Historical payroll data is not retroactively recalculated.
 
 <Tip>
   Run `GET /api/payroll/daily` alongside `GET /api/dashboard/kpis` as part of your daily end-of-day routine. The dashboard gives you the revenue picture while the payroll endpoint tells you exactly what to pay each laundrer before closing the till.

@@ -28,7 +28,9 @@ Protected routes require a **JWT Bearer token** obtained from `POST /api/users/l
 Authorization: Bearer <your_token_here>
 ```
 
-See the [Authentication guide](/api-reference/authentication) for the full login flow, token payload details, and error handling.
+Access tokens expire after **15 minutes**. Use `POST /api/users/refresh` with the `refreshToken` returned at login to obtain a new access token without re-entering credentials.
+
+See the [Authentication guide](/api-reference/authentication) for the full login flow, token payload details, refresh token usage, and error handling.
 
 ---
 
@@ -57,11 +59,18 @@ All responses are JSON. The standard HTTP status codes used throughout the API a
 | `404 Not Found` | Requested resource does not exist |
 | `500 Internal Server Error` | Unexpected server-side error |
 
-Error responses include an `error` string and, where applicable, a `message` field with extra detail:
+Error responses always include an `error` string. Where applicable a second `message` field provides additional context (for example the specific validation rule that failed):
 
 ```json
 {
   "error": "Acceso denegado. Token no proporcionado o formato incorrecto."
+}
+```
+
+```json
+{
+  "error": "Error al crear el usuario desde recepción",
+  "message": "La cédula o RIF debe comenzar con V, E, J o G"
 }
 ```
 
@@ -71,7 +80,7 @@ Error responses include an `error` string and, where applicable, a `message` fie
 
 <CardGroup cols={2}>
   <Card title="Users" icon="users" href="/api-reference/users">
-    Registration, login, profile management, and role lookup.
+    Registration, login, token refresh, profile management, and role lookup.
   </Card>
   <Card title="Vehicles" icon="car" href="/api-reference/vehicles">
     Vehicle types (`typecars`) and individual car registration by plate.
@@ -82,11 +91,17 @@ Error responses include an `error` string and, where applicable, a `message` fie
   <Card title="Service Orders" icon="clipboard-list" href="/api-reference/service-orders">
     Operational queue: create, assign to a launderer, and finish wash orders.
   </Card>
+  <Card title="Customer Orders" icon="shopping-cart" href="/api-reference/payments">
+    Web-facing order flow for customers: create, pay, approve, and reject orders.
+  </Card>
   <Card title="Inventory" icon="box" href="/api-reference/inventory">
     Products (`items`) and stock management.
   </Card>
   <Card title="Payments" icon="credit-card" href="/api-reference/payments">
     Record and approve customer payments across all payment methods.
+  </Card>
+  <Card title="Expenses" icon="arrow-trend-down" href="/api-reference/inventory">
+    Register company outflows and optionally restock inventory items.
   </Card>
   <Card title="Sales" icon="receipt" href="/api-reference/sales">
     Finalized invoices linking payments, service orders, and products sold.
@@ -94,14 +109,17 @@ Error responses include an `error` string and, where applicable, a `message` fie
   <Card title="Reservations" icon="calendar" href="/api-reference/reservations">
     Customer appointment scheduling with automatic queue enrollment.
   </Card>
+  <Card title="Launderers" icon="person-digging" href="/api-reference/service-orders">
+    Shift start/end management for launderer staff.
+  </Card>
   <Card title="Payroll" icon="money-bill" href="/api-reference/payroll">
-    Daily payroll calculation and launderer shift management.
+    Daily payroll calculation based on the shared pool system.
   </Card>
   <Card title="AutoLavado Config" icon="building" href="/api-reference/autolavado">
     Company profile, exchange rate, balance, and waiting-time estimate.
   </Card>
   <Card title="Dashboard" icon="chart-bar" href="/api-reference/dashboard">
-    Aggregated statistics for the admin dashboard.
+    Aggregated KPI statistics for the admin dashboard.
   </Card>
 </CardGroup>
 
@@ -109,12 +127,15 @@ Error responses include an `error` string and, where applicable, a `message` fie
 
 ## Role Authorization
 
-The API uses two middleware layers — `verifyToken` (validates the JWT) and `verifyRole` (checks the role claim inside it). Routes fall into three protection tiers:
+The API uses two middleware layers — `verifyToken` (validates the JWT) and `verifyRole` (checks the role claim inside it). Routes fall into four protection tiers:
 
 | Endpoint type | Required role |
 |---|---|
 | 🔒 ADMIN | JWT with `ADMIN` role |
+| 🔒 CUSTOMER | JWT with `CUSTOMER` role |
 | 🔒 ADMIN / CUSTOMER | JWT with `ADMIN` **or** `CUSTOMER` role |
 | Public | No token required |
 
 Role comparison is case-insensitive. Calling a guarded route without a token returns `401`; calling it with a token that lacks the required role returns `403`.
+
+Note: `PATCH /api/users/:id` uses an additional ownership check — an `ADMIN` can edit any user, while any other authenticated user may only edit their own profile (verified by comparing `req.user.id` against the `:id` parameter).

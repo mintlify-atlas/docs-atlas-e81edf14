@@ -1,7 +1,7 @@
 ---
-title: "Customer Reservations and Appointment Scheduling"
+title: "Customer Reservations and Appointment Scheduling — SCO"
 sidebarTitle: "Reservations"
-description: "Customers can book car wash appointments online in SCO Autolavados. Confirmed reservations are automatically queued within one hour of their scheduled time via a cron job."
+description: "Book car wash appointments in SCO Autolavados. Confirmed reservations are auto-queued one hour before their scheduled time by a background cron job."
 ---
 
 The reservations module lets customers and admins schedule car wash appointments in advance, reducing walk-in wait times and helping the business plan staffing. A key feature of the system is its **auto-queue pipeline**: a cron job periodically inspects confirmed reservations and, when an appointment is within one hour of its scheduled time, automatically creates a `ServiceOrders` entry so the vehicle appears in the queue without any manual intervention.

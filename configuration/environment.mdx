@@ -55,9 +55,9 @@ These variables must be present in your `.env` file. The backend validates `JWT_
   The `docker-compose.yml` maps this port as `3000:3000`, so changing it requires updating both the `.env` file and the `ports` mapping in the Compose file.
 </ParamField>
 
-<ParamField path="CHOKIDAR_USEPOLLING" type="boolean" default="false">
-  Enables filesystem polling in development environments where inotify-based watching is unreliable (such as Docker on Windows or macOS with virtualized file systems).
-  This variable is already hardcoded to `true` in `docker-compose.yml` for the `backend` service — you do not need to set it manually.
+<ParamField path="CHOKIDAR_USEPOLLING" type="boolean" default="true">
+  Enables filesystem polling for the `tsx watch` dev server inside the `backend` container. Docker on Linux, macOS, and Windows uses a virtualized filesystem layer that can make inotify-based file watching unreliable, so polling is required for live reload to work correctly.
+  This variable is hardcoded to `true` directly in `docker-compose.yml` for the `backend` service and is **always active** in the development stack — you do not need to set it in your `.env` file.
 </ParamField>
 
 ---

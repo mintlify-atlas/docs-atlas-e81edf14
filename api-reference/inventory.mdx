@@ -1,7 +1,7 @@
 ---
 title: "Inventory and Products API Endpoints"
 sidebarTitle: "Inventory"
-description: "REST endpoints for SCO Autolavados inventory — create products, update stock levels, and record expenses that restock items while tracking outflows."
+description: "REST endpoints for SCO Autolavados inventory — create and update products, adjust stock levels, and record expenses that restock items while tracking outflows."
 ---
 
 All protected endpoints require a valid JWT token obtained from `POST /api/users/login`. Include it in the `Authorization` header:
@@ -18,13 +18,12 @@ Products (referred to as `Item` in the database) represent physical goods sold a
 
 ### Get All Products
 
-🔒 **Requires:** Any authenticated user
+**Public endpoint — no authentication required.**
 
 Returns the full product catalog, with each item's current inventory stock nested inside.
 
 ```bash
-curl http://localhost:3000/api/items \
-  -H "Authorization: Bearer <token>"
+curl http://localhost:3000/api/items
 ```
 
 **Response 200** — Array of Item objects with nested inventory:
@@ -42,7 +41,7 @@ curl http://localhost:3000/api/items \
 </ResponseField>
 
 <ResponseField name="photo" type="string | null">
-  Filename or URL of the product photo. `null` if no image has been uploaded.
+  Filename of the product photo. `null` if no image has been uploaded.
 </ResponseField>
 
 <ResponseField name="inventory" type="object">
@@ -71,7 +70,7 @@ curl http://localhost:3000/api/items \
 
 🔒 **Requires:** `ADMIN` role
 
-Creates a new product and automatically creates its linked `Inventory` record in a single atomic transaction. The `initialQuantity` sets the opening stock.
+Creates a new product and atomically creates its linked `Inventory` record in a single database transaction. The `initialQuantity` sets the opening stock.
 
 <ParamField body="name" type="string" required>
   Unique name for the product (e.g. `"Ambientador Pino"`). Names must be unique across all items.
@@ -82,7 +81,7 @@ Creates a new product and automatically creates its linked `Inventory` record in
 </ParamField>
 
 <ParamField body="photo" type="string">
-  Optional URL or filename of the product image. Can also be uploaded as `multipart/form-data` with a `photo` file field.
+  Optional filename of the product image. Can also be uploaded as `multipart/form-data` with a `photo` file field.
 </ParamField>
 
 <ParamField body="initialQuantity" type="number">
@@ -100,25 +99,69 @@ curl -X POST http://localhost:3000/api/items \
   }'
 ```
 
-**Response 201** — The newly created Item object:
+**Response 201** — The newly created Item object (the linked `Inventory` record is created in the same transaction but is not included in this response; fetch it via `GET /api/items`):
 
 ```json
 {
   "id": "uuid",
   "name": "Ambientador Pino",
   "priceUsd": 2.5,
-  "photo": null,
-  "inventory": {
-    "id": "uuid",
-    "itemId": "uuid",
-    "quantity": 10
-  }
+  "photo": null
 }
 ```
 
 <Note>
-  Photo uploads are supported via `multipart/form-data`. When uploading a file, include the image as a `photo` field in the form data alongside the other text fields.
+  Photo uploads are supported via `multipart/form-data`. When uploading a file, send the image as a `photo` field alongside the other text fields. The stored filename is returned in the `photo` field on subsequent reads.
 </Note>
+
+---
+
+### Update a Product
+
+🔒 **Requires:** `ADMIN` role
+
+Updates one or more metadata fields of an existing product. All fields are optional — only the fields you include are updated.
+
+<ParamField path="id" type="string" required>
+  UUID of the item to update. Use the `id` returned by `GET /api/items`.
+</ParamField>
+
+<ParamField body="name" type="string">
+  New product name. Must be unique across all items.
+</ParamField>
+
+<ParamField body="priceUsd" type="number">
+  New unit sale price in USD.
+</ParamField>
+
+<ParamField body="photo" type="string">
+  New photo filename or URL. Can also be uploaded as `multipart/form-data` with a `photo` file field.
+</ParamField>
+
+<Note>
+  This endpoint updates product metadata only (`name`, `priceUsd`, `photo`). To adjust the current stock level, use `PUT /api/inventory/:itemId`.
+</Note>
+
+```bash
+curl -X PUT http://localhost:3000/api/items/<item-uuid> \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ambientador Pino Nuevo",
+    "priceUsd": 3.0
+  }'
+```
+
+**Response 200** — The updated Item object:
+
+```json
+{
+  "id": "uuid",
+  "name": "Ambientador Pino Nuevo",
+  "priceUsd": 3.0,
+  "photo": null
+}
+```
 
 ---
 
@@ -130,14 +173,14 @@ Directly manage the stock quantity for an existing product.
 
 🔒 **Requires:** `ADMIN` role
 
-Directly sets the stock quantity for a product's inventory record. This is an absolute assignment — it replaces the current quantity rather than incrementing or decrementing it.
+Directly sets the stock quantity for a product's inventory record. This is an **absolute assignment** — it replaces the current quantity rather than incrementing or decrementing it. Uses an upsert internally, so it works even if the inventory record was somehow missing.
 
 <ParamField path="itemId" type="string" required>
-  UUID of the **Item** (product), not the Inventory record. Use the `id` field returned from `GET /api/items`.
+  UUID of the **Item** (product), not the Inventory record itself. Use the `id` field returned from `GET /api/items`.
 </ParamField>
 
 <ParamField body="quantity" type="number" required>
-  The new absolute stock count to set (e.g. `15` will set stock to exactly 15, regardless of current value).
+  The new absolute stock count (e.g. `15` sets stock to exactly 15, regardless of current value).
 </ParamField>
 
 ```bash
@@ -160,18 +203,18 @@ curl -X PUT http://localhost:3000/api/inventory/<item-uuid> \
 <Note>
   **Automatic stock decrements occur when:**
 
-  - **(a)** An item is sold via `POST /api/sales` — the quantity is decremented as part of the sale record.
-  - **(b)** A customer places a product in their web order via `POST /api/customer/orders` — inventory is decremented immediately upon order creation, before payment.
-  - **(c)** A service order is finalized via `PATCH /api/service-orders/:id/finish` — any items defined as service resources are automatically decremented.
+  - **(a)** A customer places a product in their web order via `POST /api/customer/orders` — inventory is decremented immediately upon order creation, before payment is received.
+  - **(b)** A service order is finalized via `PATCH /api/service-orders/:id/finish` — any items defined as service resources (`ServiceResource`) are automatically decremented.
+  - **(c)** A service order state is manually set to `FINALIZADO` via `PATCH /api/service-orders/:id/state` — the same resource decrement logic applies.
 
-  Use `PUT /api/inventory/:itemId` only for manual corrections, opening stock, or physical count adjustments.
+  Use `PUT /api/inventory/:itemId` only for manual corrections, opening stock adjustments, or post-physical-count reconciliation.
 </Note>
 
 ---
 
 ## Expenses
 
-Record financial outflows from the business. Expenses automatically deduct from the AutoLavado's general balance. When an expense is linked to a product (`itemId`) with a `quantity`, it also restocks that product's inventory — making this the recommended way to record purchases.
+Record financial outflows from the business. Expenses automatically deduct from the AutoLavado's general balance. When an expense is linked to a product (`itemId`) with a `quantity`, it also restocks that product's inventory — making this the recommended way to record product purchases.
 
 ### Get All Expenses
 
@@ -293,7 +336,7 @@ curl -X POST http://localhost:3000/api/expenses \
 ```
 
 <Tip>
-  **Recommended restocking workflow:** Always link an expense to an `itemId` when recording product purchases. This is the canonical way to restock inventory in SCO Autolavados — it simultaneously updates financial records and product stock in a single atomic operation, ensuring your balance and inventory never fall out of sync.
+  **Recommended restocking workflow:** Always link an expense to an `itemId` when recording product purchases. This is the canonical way to restock inventory in SCO Autolavados — it simultaneously updates financial records and product stock in one atomic operation, keeping your balance and inventory in sync.
 
   For manual stock corrections (e.g. after a physical count), use `PUT /api/inventory/:itemId` directly instead.
 </Tip>

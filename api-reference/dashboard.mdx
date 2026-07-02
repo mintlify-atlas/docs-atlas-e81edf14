@@ -1,7 +1,7 @@
 ---
-title: "Dashboard KPIs API Endpoint"
+title: "Admin Dashboard KPIs API Reference — SCO Autolavados"
 sidebarTitle: "Dashboard"
-description: "GET /api/dashboard/kpis returns real-time business analytics for the SCO Autolavados admin panel — revenue, balances, top customers, and service metrics."
+description: "Returns real-time KPIs for the SCO Autolavados admin panel — today's revenue, vehicle count, laundrer utilization, and 7-day sales history."
 ---
 
 The Dashboard KPIs endpoint aggregates the most important operational and financial metrics into a single response for the administrative panel. All date calculations are anchored to **Venezuela Time (VET, UTC-4)** via `dayjs` with the `America/Caracas` timezone, so "today" always reflects the local business day.

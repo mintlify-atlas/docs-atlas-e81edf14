@@ -1,7 +1,7 @@
 ---
-title: "Vehicles (Cars) API Endpoints"
+title: "Vehicles and Car Types API Reference — SCO Autolavados"
 sidebarTitle: "Vehicles"
-description: "REST endpoints for managing vehicles and vehicle types in SCO Autolavados — register, search by plate, update, and manage type categories."
+description: "REST endpoints for managing vehicles and vehicle types in SCO Autolavados — register cars, search by plate, update records, and manage type categories."
 ---
 
 ## Overview
@@ -382,13 +382,12 @@ Before registering a new vehicle at the reception desk, call `GET /api/cars/:pla
 
 ---
 
-### `PUT /api/cars/:id` <Icon icon="lock" /> Any authenticated user
+### `PUT /api/cars/:id`
 
-Updates one or more fields of an existing vehicle record.
+Updates one or more fields of an existing vehicle record. This endpoint has **no authentication requirement** — any caller can submit an update.
 
 ```bash
 curl -X PUT http://localhost:3000/api/cars/uuid-del-vehiculo \
-  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
     "color": "Negro",

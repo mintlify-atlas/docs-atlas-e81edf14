@@ -1,7 +1,7 @@
 ---
 title: "Service Orders and Laundrer Operations API"
 sidebarTitle: "Service Orders"
-description: "REST endpoints for the SCO Autolavados service queue — create orders, assign laundrers, update status, manage laundrer shifts, and get estimated wait time."
+description: "REST endpoints for the SCO Autolavados service queue — create orders, assign laundrers, update state, manage laundrer shifts, and get estimated wait time."
 ---
 
 All protected endpoints require a valid JWT token obtained from `POST /api/users/login`. Include it in the `Authorization` header:
@@ -14,22 +14,27 @@ Authorization: Bearer <your_jwt_token>
 
 ## Service Orders
 
-Manage the vehicle service queue — from creation through assignment to completion.
+Manage the vehicle service queue — from creation through laundrer assignment to completion.
 
 <Note>
   **Order State Reference:**
-  - `EN_ESPERA` — Vehicle is waiting in queue
-  - `LAVANDO` — Vehicle is actively being washed
-  - `FINALIZADO` — Wash is complete
-  - `PENDIENTE` — Auto-queued from an online reservation (not yet confirmed by reception)
+  - `EN_ESPERA` — Vehicle is waiting in the reception queue (set manually at creation)
+  - `LAVANDO` — Vehicle is actively being washed (set by `PATCH /api/service-orders/:id/start`)
+  - `FINALIZADO` — Wash is complete (set by `PATCH /api/service-orders/:id/finish` or the `/state` endpoint)
+  - `En cola` — Auto-queued from a customer web order via `POST /api/customer/orders` (not yet assigned to a laundrer)
+  - `CANCELLED` — Order was cancelled when its parent customer order was rejected
 
-  When a service order transitions to `FINALIZADO`, the system automatically decrements inventory for any items linked as resources to that service.
+  When a service order transitions to `FINALIZADO`, the system automatically decrements inventory for any items linked as resources to the service definition (`ServiceResource` records).
 </Note>
 
 ### Get All Service Orders
 
+**Public endpoint — no authentication required.**
+
+Returns all service orders, optionally filtered by date, vehicle, user, or laundrer. Supports pagination when `page` and `limit` are both supplied.
+
 <ParamField query="date" type="string">
-  Filter by date in `YYYY-MM-DD` format. Returns all orders created on that day.
+  Filter by date in `YYYY-MM-DD` format. Returns all orders created on that calendar day.
 </ParamField>
 
 <ParamField query="carId" type="string">
@@ -37,7 +42,7 @@ Manage the vehicle service queue — from creation through assignment to complet
 </ParamField>
 
 <ParamField query="userId" type="string">
-  Filter orders by the UUID of the receptionist/admin who created them.
+  Filter orders by the UUID of the receptionist or admin who created them.
 </ParamField>
 
 <ParamField query="laundrerId" type="string">
@@ -54,7 +59,6 @@ Manage the vehicle service queue — from creation through assignment to complet
 
 ```http
 GET /api/service-orders
-Authorization: Bearer <token>
 ```
 
 **Response 200** — Array of ServiceOrder objects (or paginated wrapper when `page`/`limit` are supplied):
@@ -64,11 +68,11 @@ Authorization: Bearer <token>
 </ResponseField>
 
 <ResponseField name="state" type="string">
-  Current state: `EN_ESPERA`, `LAVANDO`, `FINALIZADO`, or `PENDIENTE`.
+  Current state: `EN_ESPERA`, `LAVANDO`, `FINALIZADO`, `En cola`, or `CANCELLED`.
 </ResponseField>
 
 <ResponseField name="timeStart" type="string">
-  ISO 8601 datetime when the wash started (or is scheduled to start).
+  ISO 8601 datetime when the wash started (or was scheduled to start).
 </ResponseField>
 
 <ResponseField name="stimatedTimeEnd" type="string">
@@ -115,14 +119,27 @@ Authorization: Bearer <token>
 ]
 ```
 
+Paginated response (when `page` and `limit` are provided):
+
+```json
+{
+  "orders": [ /* array of ServiceOrder objects */ ],
+  "total": 42,
+  "page": 1,
+  "totalPages": 5
+}
+```
+
 ---
 
 ### Create a Service Order
 
 🔒 **Requires:** `ADMIN` role
 
+Creates a new service order in the reception queue.
+
 <ParamField body="state" type="string" required>
-  Initial state for the order. Typically `EN_ESPERA` when created from reception.
+  Initial state for the order. Typically `EN_ESPERA` when created directly from reception.
 </ParamField>
 
 <ParamField body="timeStart" type="string" required>
@@ -138,7 +155,7 @@ Authorization: Bearer <token>
 </ParamField>
 
 <ParamField body="serviceId" type="string" required>
-  UUID of the service to be performed (e.g. "Lavado Básico").
+  UUID of the service to be performed (e.g. `"Lavado Básico"`).
 </ParamField>
 
 <ParamField body="userId" type="string" required>
@@ -188,18 +205,18 @@ curl -X POST http://localhost:3000/api/service-orders \
 
 🔒 **Requires:** `ADMIN` role
 
-Manually set the state of any service order. For a more structured workflow, prefer the dedicated `/start` and `/finish` endpoints.
+Manually sets the state of any service order to an arbitrary value. For structured workflow transitions, prefer the dedicated `/start` and `/finish` endpoints.
 
 <ParamField path="id" type="string" required>
   UUID of the service order to update.
 </ParamField>
 
 <ParamField body="state" type="string" required>
-  The new state value. One of: `EN_ESPERA`, `LAVANDO`, `FINALIZADO`, `PENDIENTE`.
+  The new state value. Common values: `EN_ESPERA`, `LAVANDO`, `FINALIZADO`.
 </ParamField>
 
 <Warning>
-  Setting state to `FINALIZADO` via this endpoint will automatically record `timeEnd` and decrement inventory for any resources linked to the service. Avoid manually setting `FINALIZADO` if you want consistent `timeEnd` tracking — use `PATCH /api/service-orders/:id/finish` instead.
+  Setting state to `FINALIZADO` via this endpoint records `timeEnd` as the current timestamp and automatically decrements inventory for any resources linked to the service. For consistent `timeEnd` tracking and inventory handling, prefer `PATCH /api/service-orders/:id/finish`.
 </Warning>
 
 ```bash
@@ -217,7 +234,7 @@ curl -X PATCH http://localhost:3000/api/service-orders/<order-uuid>/state \
 
 🔒 **Requires:** `ADMIN` role
 
-Assigns a laundrer to the order and transitions its state to `LAVANDO`. Also records `timeStart` as the actual wash-start time and automatically marks the laundrer as `isWorkingToday: true`.
+Assigns a laundrer to the order and transitions its state to `LAVANDO`. Records `timeStart` as the actual wash-start timestamp and automatically marks the laundrer as `isWorkingToday: true` with `lastShiftStart` set to now.
 
 <ParamField path="id" type="string" required>
   UUID of the service order.
@@ -228,7 +245,7 @@ Assigns a laundrer to the order and transitions its state to `LAVANDO`. Also rec
 </ParamField>
 
 <Warning>
-  Returns `500` if the specified laundrer already has another order in `LAVANDO` state. A laundrer can only actively wash one vehicle at a time.
+  Returns `500` if the specified laundrer already has another order in `LAVANDO` state: `"Este lavador ya se encuentra lavando un vehículo en este momento"`. A laundrer can only actively wash one vehicle at a time.
 </Warning>
 
 ```bash
@@ -238,7 +255,7 @@ curl -X PATCH http://localhost:3000/api/service-orders/<order-uuid>/start \
   -d '{ "laundrerId": "<laundrer-uuid>" }'
 ```
 
-**Response 200** — Updated ServiceOrder object with `state: "LAVANDO"` and `laundrerId` set.
+**Response 200** — Updated ServiceOrder object with `state: "LAVANDO"` and `laundrerId` set:
 
 ```json
 {
@@ -260,7 +277,7 @@ curl -X PATCH http://localhost:3000/api/service-orders/<order-uuid>/start \
 
 🔒 **Requires:** `ADMIN` role
 
-Marks a service order as complete. Records `timeEnd` as the current timestamp, sets state to `FINALIZADO`, and automatically decrements inventory for any items listed as service resources.
+Marks a service order as complete. Sets state to `FINALIZADO`, records `timeEnd` as the current timestamp, and automatically decrements inventory for any items listed as service resources (`ServiceResource` records linked to the service).
 
 <ParamField path="id" type="string" required>
   UUID of the service order to finalize.
@@ -284,6 +301,35 @@ curl -X PATCH http://localhost:3000/api/service-orders/<order-uuid>/finish \
   "carId": "uuid",
   "serviceId": "uuid",
   "userId": "uuid"
+}
+```
+
+---
+
+### Delete a Service Order
+
+🔒 **Requires:** `ADMIN` role
+
+Permanently deletes a service order record from the database. This action is irreversible.
+
+<ParamField path="id" type="string" required>
+  UUID of the service order to delete.
+</ParamField>
+
+<Warning>
+  This is a hard delete — the record cannot be recovered. For orders originating from a customer web order, use `DELETE /api/customer/orders/:id/reject` instead, which safely reverses inventory and marks associated service orders as `CANCELLED` rather than removing them.
+</Warning>
+
+```bash
+curl -X DELETE http://localhost:3000/api/service-orders/<order-uuid> \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200:**
+
+```json
+{
+  "message": "Orden eliminada correctamente"
 }
 ```
 
@@ -385,7 +431,7 @@ curl http://localhost:3000/api/autolavado/waiting-time
 </ResponseField>
 
 <ResponseField name="waitingOrdersCount" type="number">
-  Number of orders currently in `EN_ESPERA` state.
+  Number of orders currently in an active queue state.
 </ResponseField>
 
 ```json

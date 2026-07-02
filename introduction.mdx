@@ -1,7 +1,7 @@
 ---
 title: "SCO Autolavados: Car Wash Operations Platform"
 sidebarTitle: "Introduction"
-description: "SCO Autolavados is an open-source full-stack management system for car wash businesses, covering service queues, multi-currency billing, inventory, payroll, and customer reservations."
+description: "Open-source car wash management platform with service queues, multi-currency billing, inventory, payroll, and customer reservations."
 ---
 
 SCO Autolavados is a full-stack web platform purpose-built for car wash owners and operators who need to replace paper-based workflows with a real-time, digitally-integrated system. It handles every stage of the business day — from receiving a vehicle at the front desk and routing it through the wash queue, to issuing multi-currency invoices, tracking chemical inventory, calculating laundrer commissions, and letting customers schedule appointments from their phones. The platform eliminates the guesswork of manual bookkeeping by centralizing operations into two distinct interfaces: an **Admin Dashboard** for staff and owners, and a **Customer Portal** for self-service clients.
@@ -55,7 +55,7 @@ Laundrers have no login credentials and no access to any frontend interface. The
 
 ## Multi-Currency Engine
 
-All prices, sales, and balances are stored in **US Dollars (USD)** as the canonical currency. Bolívar (BsS) amounts are derived at transaction time using the official BCV (Banco Central de Venezuela) exchange rate, which the system fetches automatically every morning at 6:00 AM. The `AutoLavado` configuration record tracks both `balanceUsd` and `balanceBs`, as well as `currentTasaBs` (USD/BsS) and `currentTasaEurBs` (EUR/BsS) for flexible billing. Payments can be split across multiple methods and currencies within a single transaction.
+All prices, sales, and balances are stored in **US Dollars (USD)** as the canonical currency. Bolívar (BsS) amounts are derived at transaction time using the official exchange rates, which the system fetches automatically every morning at 6:00 AM from **dolarapi** (`ve.dolarapi.com`). Both the USD/BsS and EUR/BsS rates are retrieved in a single parallel fetch. The `AutoLavado` configuration record tracks both `balanceUsd` and `balanceBs`, as well as `currentTasaBs` (USD/BsS) and `currentTasaEurBs` (EUR/BsS) for flexible billing. Payments can be split across multiple methods and currencies within a single transaction.
 
 ## Technology Stack
 

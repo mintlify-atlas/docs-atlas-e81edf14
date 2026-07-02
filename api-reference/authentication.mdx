@@ -4,7 +4,7 @@ sidebarTitle: "Authentication"
 description: "SCO Autolavados API uses JWT Bearer tokens. Obtain a token via POST /api/users/login and include it in the Authorization header on protected routes."
 ---
 
-The SCO Autolavados API uses **JSON Web Tokens (JWT)** for stateless authentication. The flow is straightforward: call the login endpoint with valid credentials, receive a signed JWT, then include that token in the `Authorization` header of every request to a protected route. No session state is kept on the server — each request is authenticated independently by verifying the token's signature against `JWT_SECRET`.
+The SCO Autolavados API uses **JSON Web Tokens (JWT)** for stateless authentication. The flow is straightforward: call the login endpoint with valid credentials, receive a signed access token and a refresh token, then include the access token in the `Authorization` header of every request to a protected route. No session state is kept on the server — each request is authenticated independently by verifying the token's signature against `JWT_SECRET`.
 
 ---
 
@@ -23,21 +23,28 @@ curl -X POST http://localhost:3000/api/users/login \
 ```json
 {
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "user": {
     "id": "a1b2c3d4-...",
-    "email": null,
-    "role": "ADMIN"
+    "email": "admin@example.com",
+    "cedula": "V12345678",
+    "role": {
+      "id": "uuid-role",
+      "name": "ADMIN"
+    }
   }
 }
 ```
 
-The `identifier` field accepts either the user's `email` or `user` (username) field — the login controller resolves both automatically. Store the returned `token` value; you will need it for every authenticated request.
+The response contains both a short-lived **access token** (`token`, valid for **15 minutes**) and a long-lived **refresh token** (`refreshToken`, valid for **7 days**). Store both values — use `token` to authenticate API calls and `refreshToken` to silently obtain a new access token once it expires.
+
+The `identifier` field accepts either the user's `email` or `user` (username) — the login controller resolves both automatically.
 
 ---
 
 ## Using the Token
 
-Include the token as a **Bearer** credential in the `Authorization` header:
+Include the access token as a **Bearer** credential in the `Authorization` header:
 
 ```bash
 curl http://localhost:3000/api/users \
@@ -45,6 +52,38 @@ curl http://localhost:3000/api/users \
 ```
 
 The header must follow the exact format `Bearer <token>`. Any other format (missing scheme, extra whitespace, etc.) will be rejected with `401`.
+
+---
+
+## Refreshing an Expired Token
+
+When the access token expires (after 15 minutes), call `POST /api/users/refresh` with the refresh token to obtain a new access token without re-entering credentials.
+
+```bash
+curl -X POST http://localhost:3000/api/users/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}'
+```
+
+**Successful response — `200 OK`:**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+The endpoint returns only a new `token` (access token). The refresh token itself is not rotated — the same `refreshToken` from the original login remains valid until it expires after 7 days.
+
+**Error responses:**
+
+| Status | Scenario |
+|---|---|
+| `401` | `refreshToken` field is missing from the request body |
+| `401` | Refresh token signature is invalid or it has expired |
+| `401` | The user account associated with the refresh token is inactive |
+
+The refresh token payload contains `{ id, isRefresh: true }`. The server validates the `isRefresh` flag; supplying a regular access token to this endpoint will be rejected with `401`.
 
 ---
 
@@ -57,15 +96,24 @@ When the `verifyToken` middleware receives a request it:
 3. Calls `jwt.verify(token, process.env.JWT_SECRET)` to validate the signature and expiry.
 4. Attaches the decoded payload to `req.user` so downstream controllers can read it.
 
-The decoded payload contains at minimum:
+The decoded access token payload contains:
 
 | Claim | Description |
 |---|---|
 | `id` | UUID of the authenticated user |
+| `email` | Email address of the authenticated user (may be `null` for reception-created accounts) |
+| `cedula` | National ID / RIF of the authenticated user |
 | `role` | Role name string (e.g. `"ADMIN"`, `"CUSTOMER"`, `"LAUNDRER"`) |
-| `exp` | Unix timestamp of token expiry (set at signing time) |
+| `exp` | Unix timestamp of token expiry (15 minutes after issuance) |
+| `iat` | Unix timestamp of token issuance |
 
-If the token is missing, malformed, or expired, `verifyToken` responds immediately with `401` and does **not** call `next()`.
+If the token is missing, malformed, or expired, `verifyToken` responds immediately with `401` and does **not** call `next()`:
+
+```json
+{
+  "error": "Token inválido o expirado"
+}
+```
 
 ---
 
@@ -81,11 +129,19 @@ router.get('/users', verifyToken, verifyRole(['ADMIN']), async (req, res) => { .
 router.post('/payments', verifyToken, verifyRole(['ADMIN', 'CUSTOMER']), async (req, res) => { ... });
 ```
 
-If the authenticated user's role is not in the allowed list, the middleware returns:
+If the authenticated user's role is not in the allowed list, the middleware returns `403`:
 
 ```json
 {
   "error": "Acceso denegado. Se requiere uno de los siguientes roles: ADMIN"
+}
+```
+
+If `req.user` or `req.user.role` is absent after token verification, the middleware returns `403`:
+
+```json
+{
+  "error": "Acceso denegado. Rol no identificado."
 }
 ```
 
@@ -98,6 +154,7 @@ If the authenticated user's role is not in the allowed list, the middleware retu
 | `401` | `Authorization` header is missing or does not start with `Bearer ` |
 | `401` | Token signature is invalid or the token has expired |
 | `401` | Wrong credentials supplied to `POST /api/users/login` |
+| `401` | Missing or invalid `refreshToken` supplied to `POST /api/users/refresh` |
 | `403` | Valid token, but the user's role is not permitted for the requested endpoint |
 
 ---
@@ -105,7 +162,7 @@ If the authenticated user's role is not in the allowed list, the middleware retu
 ## Token Storage
 
 <Note>
-  The SCO Autolavados frontend stores the JWT in **`localStorage`** after a successful login (per `api_test_flow.md`). This makes the token available across page refreshes and browser tabs. For production deployments that require higher security guarantees, consider migrating to **`httpOnly` cookies** so the token is not accessible from JavaScript, reducing exposure to XSS attacks.
+  The SCO Autolavados frontend stores the JWT in **`localStorage`** after a successful login. This makes the token available across page refreshes and browser tabs. For production deployments that require higher security guarantees, consider migrating to **`httpOnly` cookies** so the token is not accessible from JavaScript, reducing exposure to XSS attacks.
 </Note>
 
 ---

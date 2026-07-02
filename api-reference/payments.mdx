@@ -1,7 +1,7 @@
 ---
 title: "Payments and Customer Orders API Endpoints"
 sidebarTitle: "Payments"
-description: "REST endpoints for payments, payment approval, and customer web orders in SCO Autolavados — covering all payment methods, the approval workflow, and online order management."
+description: "REST endpoints for payments, approval workflow, and customer web orders in SCO Autolavados — covering all payment methods, balance updates, and order lifecycle management."
 ---
 
 All protected endpoints require a valid JWT token obtained from `POST /api/users/login`. Include it in the `Authorization` header:
@@ -14,40 +14,105 @@ Authorization: Bearer <your_jwt_token>
 
 ## Payments
 
-Payments capture money received from customers. A payment starts as unapproved (`approved: false`) and is approved by an admin after the funds are verified in the business account. Approving a payment updates the AutoLavado's `balanceUsd` and `balanceBs`.
+Payments capture money received from customers. Whether a payment starts as approved or unapproved depends on how it is created — see the individual endpoints for details. Approving a payment increments the AutoLavado's `balanceUsd` and/or `balanceBs` depending on the payment method.
+
+### Get All Payments
+
+🔒 **Requires:** Any authenticated user (token required)
+
+Returns all payment records ordered by most recent first, with each payment's customer details nested inside.
+
+```bash
+curl http://localhost:3000/api/payments \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200** — Array of Payment objects:
+
+<ResponseField name="id" type="string">
+  UUID of the payment record.
+</ResponseField>
+
+<ResponseField name="customerId" type="string">
+  UUID of the customer who made the payment.
+</ResponseField>
+
+<ResponseField name="customer" type="object">
+  Nested customer (User) object.
+</ResponseField>
+
+<ResponseField name="method" type="string">
+  Payment method used.
+</ResponseField>
+
+<ResponseField name="mountUSD" type="number">
+  Amount paid in USD.
+</ResponseField>
+
+<ResponseField name="mountBS" type="number">
+  Amount paid in bolívares.
+</ResponseField>
+
+<ResponseField name="reference" type="string | null">
+  Transaction reference number, if provided.
+</ResponseField>
+
+<ResponseField name="approved" type="boolean">
+  Whether the payment has been verified and applied to the business balance.
+</ResponseField>
+
+<ResponseField name="date" type="string">
+  ISO 8601 datetime of the payment.
+</ResponseField>
+
+```json
+[
+  {
+    "id": "uuid",
+    "customerId": "uuid",
+    "customer": { "name": "Ana", "lastName": "López" },
+    "method": "Pago Movil",
+    "mountUSD": 0,
+    "mountBS": 4666.60,
+    "reference": "REF123456",
+    "approved": true,
+    "date": "2026-06-26T11:00:00.000Z"
+  }
+]
+```
+
+---
 
 ### Create a Payment
 
-🔒 **Requires:** `ADMIN` or `CUSTOMER` role
+🔒 **Requires:** Any authenticated user (token required)
 
-Registers a new incoming payment from a customer. The payment is created immediately and the appropriate balance is updated when the payment is approved. The available methods cover all common Venezuelan payment modalities.
+Registers a new incoming payment from a customer. Payments created through this endpoint are immediately marked `approved: true` and the AutoLavado's balance is updated in the same transaction. This endpoint is intended for in-person POS transactions where funds are confirmed at the time of creation.
 
 <ParamField body="customerId" type="string" required>
   UUID of the customer making the payment. Must correspond to an existing user.
 </ParamField>
 
 <ParamField body="method" type="string" required>
-  Payment method. Accepted values: `Pago Movil`, `Efectivo`, `Binance`, `Débito`, `Transferencia`, `Zelle`, `Punto de Venta`.
+  Payment method. Accepted values: `Pago Movil`, `Efectivo`, `Binance`, `debit`, `transferencia`, `Zelle`, `Punto de Venta`, `cash`.
 </ParamField>
 
 <ParamField body="mountUSD" type="number" required>
-  Amount in USD. For BS-only methods (e.g. Pago Móvil), this can be `0`.
+  Amount in USD. For BS-only methods (e.g. `Pago Movil`), pass `0`.
 </ParamField>
 
 <ParamField body="mountBS" type="number" required>
-  Amount in bolívares. **Must be `0`** when `method` is `Binance` — Binance payments are USD-only.
+  Amount in bolívares. **Must be `0`** when `method` is `binance` — Binance payments are USD-only.
 </ParamField>
 
 <ParamField body="reference" type="string">
-  Transaction or confirmation reference number. Required for non-cash methods (e.g. Pago Móvil, Transferencia). Optional for cash payments.
-</ParamField>
-
-<ParamField body="date" type="string">
-  ISO 8601 datetime of the payment. Defaults to the current server time if not provided.
+  Transaction or confirmation reference number. Required for non-cash methods (e.g. `Pago Movil`, `transferencia`). Optional for cash payments.
 </ParamField>
 
 <Warning>
-  If `method` is `Binance`, `mountBS` must be `0`. Sending a non-zero `mountBS` with Binance will return a `400` error: `"Los pagos por Binance solo permiten USD (el monto en Bs debe ser 0)"`.
+  If `method` is `binance`, `mountBS` must be `0`. Sending a non-zero `mountBS` will return a `400` error: `"Los pagos por Binance solo permiten USD (el monto en Bs debe ser 0)"`.
+
+  For non-cash methods, `reference` is required. Omitting it returns `400`: `"El número de referencia es obligatorio para pagos con {method}"`.
 </Warning>
 
 ```bash
@@ -57,13 +122,13 @@ curl -X POST http://localhost:3000/api/payments \
   -d '{
     "customerId": "<customer-uuid>",
     "method": "Pago Movil",
-    "mountUSD": 7.5,
+    "mountUSD": 0,
     "mountBS": 4666.60,
     "reference": "REF123456"
   }'
 ```
 
-**Response 201** — The newly created Payment object:
+**Response 201** — The newly created Payment object (always `approved: true` for this endpoint):
 
 <ResponseField name="id" type="string">
   UUID of the payment record.
@@ -90,7 +155,7 @@ curl -X POST http://localhost:3000/api/payments \
 </ResponseField>
 
 <ResponseField name="approved" type="boolean">
-  Whether the payment has been verified and applied to the business balance. Always `false` on creation.
+  Always `true` for payments created via this endpoint — funds are confirmed at POS creation time.
 </ResponseField>
 
 <ResponseField name="date" type="string">
@@ -102,10 +167,10 @@ curl -X POST http://localhost:3000/api/payments \
   "id": "uuid",
   "customerId": "uuid",
   "method": "Pago Movil",
-  "mountUSD": 7.5,
+  "mountUSD": 0,
   "mountBS": 4666.60,
   "reference": "REF123456",
-  "approved": false,
+  "approved": true,
   "date": "2026-06-26T11:00:00.000Z"
 }
 ```
@@ -116,7 +181,7 @@ curl -X POST http://localhost:3000/api/payments \
 
 🔒 **Requires:** `ADMIN` role
 
-Verifies and approves a pending payment. Sets `approved: true` and adds the payment amounts to the AutoLavado's financial balances. The balance update is method-aware:
+Verifies and approves a pending payment (one with `approved: false`). Sets `approved: true` and adds the payment amounts to the AutoLavado's financial balances. The balance update is method-aware:
 
 | Method | Balance updated |
 |---|---|
@@ -146,7 +211,7 @@ curl -X PATCH http://localhost:3000/api/payments/<payment-uuid>/approve \
     "id": "uuid",
     "customerId": "uuid",
     "method": "Pago Movil",
-    "mountUSD": 7.5,
+    "mountUSD": 0,
     "mountBS": 4666.60,
     "reference": "REF123456",
     "approved": true,
@@ -159,38 +224,96 @@ curl -X PATCH http://localhost:3000/api/payments/<payment-uuid>/approve \
 
 ## Customer Orders
 
-Customer Orders allow clients to submit product purchases and service requests through the web interface. An order starts as `PENDING` and moves to `PAID` once a payment is linked.
+Customer Orders allow clients to submit product purchases and service requests through the web interface. An order starts as `PENDING` and moves to `APPROVED` or `REJECTED` after admin review.
 
 <Info>
   **Order Status Reference:**
-  - `PENDING` — Order has been created and inventory decremented, but no payment has been registered yet.
-  - `PAID` — A payment has been linked to the order via `POST /api/customer/orders/:id/pay`.
+  - `PENDING` — Order has been created, inventory decremented, but not yet reviewed by an admin.
+  - `APPROVED` — Admin has approved the order and a `Sales` record has been generated.
+  - `REJECTED` — Admin has rejected the order. Inventory is restored and any linked service orders are marked `CANCELLED`.
 
-  Orders remain in `PENDING` until the customer completes payment. Inventory for product details is decremented **immediately** upon order creation, regardless of payment status. If an order is abandoned without payment, inventory adjustments must be corrected manually via `PUT /api/inventory/:itemId`.
+  Calling `POST /api/customer/orders/:id/pay` links a payment to the order but does **not** change its status — the order remains `PENDING` until an admin calls the approve or reject endpoints.
 </Info>
+
+### Get My Orders (Customer)
+
+🔒 **Requires:** `CUSTOMER` role
+
+Returns all orders belonging to the authenticated customer, based on the JWT token identity. Orders are returned in descending date order and include full details with linked items, services, and payment.
+
+```bash
+curl http://localhost:3000/api/customer/orders/my \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200** — Array of OrderCustomers objects for the authenticated customer.
+
+```json
+[
+  {
+    "id": "uuid",
+    "customerId": "uuid",
+    "paymentId": "uuid",
+    "status": "PENDING",
+    "date": "2026-06-26T10:00:00.000Z",
+    "customer": { "name": "Ana", "lastName": "López" },
+    "payment": { "method": "Pago Movil", "approved": false },
+    "details": [
+      {
+        "id": "uuid",
+        "orderId": "uuid",
+        "itemId": "uuid",
+        "serviceId": null,
+        "cant": 2,
+        "UPriceUsd": 2.5,
+        "item": { "name": "Ambientador Pino" }
+      }
+    ]
+  }
+]
+```
+
+---
+
+### Get All Orders (Admin)
+
+🔒 **Requires:** `ADMIN` role
+
+Returns all customer orders across all customers. Includes full details with items, services, service orders, and linked payments.
+
+```bash
+curl http://localhost:3000/api/customer/orders \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200** — Array of all OrderCustomers objects.
+
+---
 
 ### Create a Customer Order
 
 🔒 **Requires:** `CUSTOMER` role
 
-Creates a new order from the customer-facing web interface. Each order can include a mix of product purchases and service requests. The following effects happen atomically:
+Creates a new order from the customer-facing web interface. The `customerId` is taken automatically from the authenticated JWT token — it is not accepted in the request body. Each order can include a mix of product purchases and service requests. The following effects happen atomically in a single transaction:
 
-- **For product details** (`itemId`): Inventory is decremented by `cant` immediately.
-- **For service details** (`serviceId`): A new `ServiceOrders` entry is created in `EN_ESPERA` state and linked to this order.
+- **For product details** (`itemId`): Inventory is checked for sufficient stock and decremented by `cant` immediately.
+- **For service details** (`serviceId`): A new `ServiceOrders` entry is created in `En cola` state and linked to this order.
 
 <ParamField body="carId" type="string">
-  Optional UUID of the customer's vehicle. Required when any `details` entry includes a `serviceId` (the service order needs a vehicle to be associated with).
+  UUID of the customer's vehicle. Required when any `details` entry includes a `serviceId`.
 </ParamField>
 
 <ParamField body="details" type="array" required>
-  Array of order line items. Each item is either a product or a service:
+  Array of order line items. Each entry must have either `itemId` or `serviceId`, along with `cant`:
 
-  - **Product line:** `{ "itemId": "uuid", "cant": 2, "UPriceUsd": 2.5 }`
+  - **Product line:** `{ "itemId": "uuid", "cant": 2 }`
   - **Service line:** `{ "serviceId": "uuid", "cant": 1 }`
+
+  Prices are fetched from the database automatically — do not supply `UPriceUsd` in the request body.
 </ParamField>
 
 <Warning>
-  Returns `500` if there is insufficient inventory for any product line. Ensure stock levels are sufficient before placing an order with product details.
+  Returns `400` if there is insufficient inventory for any product line: `"Inventario insuficiente para el item {itemId}"`. Inventory is decremented at creation, before payment is linked.
 </Warning>
 
 ```bash
@@ -202,8 +325,7 @@ curl -X POST http://localhost:3000/api/customer/orders \
     "details": [
       {
         "itemId": "<ambientador-uuid>",
-        "cant": 1,
-        "UPriceUsd": 2.5
+        "cant": 1
       },
       {
         "serviceId": "<lavado-basico-uuid>",
@@ -220,7 +342,7 @@ curl -X POST http://localhost:3000/api/customer/orders \
 </ResponseField>
 
 <ResponseField name="customerId" type="string">
-  UUID of the customer who placed the order.
+  UUID of the customer who placed the order (from JWT token).
 </ResponseField>
 
 <ResponseField name="paymentId" type="string | null">
@@ -228,15 +350,11 @@ curl -X POST http://localhost:3000/api/customer/orders \
 </ResponseField>
 
 <ResponseField name="status" type="string">
-  Current order status. `PENDING` on creation.
+  Current order status. Always `PENDING` on creation.
 </ResponseField>
 
 <ResponseField name="date" type="string">
   ISO 8601 datetime when the order was placed.
-</ResponseField>
-
-<ResponseField name="details" type="array">
-  Array of order line items, each with `itemId` or `serviceId`, `cant`, and `UPriceUsd`.
 </ResponseField>
 
 ```json
@@ -245,17 +363,7 @@ curl -X POST http://localhost:3000/api/customer/orders \
   "customerId": "uuid",
   "paymentId": null,
   "status": "PENDING",
-  "date": "2026-06-26T10:00:00.000Z",
-  "details": [
-    {
-      "id": "uuid",
-      "orderId": "uuid",
-      "itemId": "uuid",
-      "serviceId": null,
-      "cant": 1,
-      "UPriceUsd": 2.5
-    }
-  ]
+  "date": "2026-06-26T10:00:00.000Z"
 }
 ```
 
@@ -263,16 +371,16 @@ curl -X POST http://localhost:3000/api/customer/orders \
 
 ### Pay for a Customer Order
 
-🔒 **Requires:** `CUSTOMER` or `ADMIN` role
+🔒 **Requires:** Any authenticated user (token required)
 
-Creates a `Payment` record and links it to the customer order, transitioning the order status to `PAID`. This is the standard checkout step after a customer order has been created.
+Creates a `Payment` record and links it to the customer order by setting its `paymentId`. The order status remains `PENDING` — admin approval is still required after payment is linked. The created payment starts with `approved: false` and must be approved separately via `PATCH /api/payments/:id/approve`.
 
 <ParamField path="id" type="string" required>
   UUID of the `OrderCustomers` record to pay for.
 </ParamField>
 
 <ParamField body="method" type="string" required>
-  Payment method. Accepted values: `Pago Movil`, `Efectivo`, `Binance`, `Débito`, `Transferencia`, `Zelle`, `Punto de Venta`.
+  Payment method. Accepted values: `debit`, `Pago Movil`, `binance`, `cash`, `transferencia`.
 </ParamField>
 
 <ParamField body="mountUSD" type="number" required>
@@ -280,8 +388,12 @@ Creates a `Payment` record and links it to the customer order, transitioning the
 </ParamField>
 
 <ParamField body="mountBS" type="number" required>
-  Amount in bolívares. Must be `0` if `method` is `Binance`.
+  Amount in bolívares. Must be `0` if `method` is `binance`.
 </ParamField>
+
+<Warning>
+  Returns `400` if the order already has a payment linked: `"La orden ya tiene un pago registrado"`. Each order can only be paid once.
+</Warning>
 
 ```bash
 curl -X POST http://localhost:3000/api/customer/orders/<order-uuid>/pay \
@@ -289,7 +401,7 @@ curl -X POST http://localhost:3000/api/customer/orders/<order-uuid>/pay \
   -H "Content-Type: application/json" \
   -d '{
     "method": "Pago Movil",
-    "mountUSD": 7.5,
+    "mountUSD": 0,
     "mountBS": 4666.60
   }'
 ```
@@ -298,24 +410,109 @@ curl -X POST http://localhost:3000/api/customer/orders/<order-uuid>/pay \
 
 ```json
 {
-  "id": "uuid",
-  "customerId": "uuid",
-  "paymentId": "uuid",
-  "status": "PAID",
-  "date": "2026-06-26T10:00:00.000Z",
-  "details": [
-    {
-      "id": "uuid",
-      "orderId": "uuid",
-      "itemId": "uuid",
-      "serviceId": null,
-      "cant": 1,
-      "UPriceUsd": 2.5
-    }
-  ]
+  "message": "Pago registrado exitosamente",
+  "order": {
+    "id": "uuid",
+    "customerId": "uuid",
+    "paymentId": "uuid",
+    "status": "PENDING",
+    "date": "2026-06-26T10:00:00.000Z"
+  }
 }
 ```
 
 <Note>
-  The payment created by this endpoint starts as `approved: false`, just like a direct `POST /api/payments`. An admin still needs to verify the transaction and call `PATCH /api/payments/:id/approve` to apply the funds to the AutoLavado's balance.
+  The payment created by this endpoint starts as `approved: false`. An admin must verify the transaction and call `PATCH /api/payments/:id/approve` to apply the funds to the AutoLavado's balance, then call `PATCH /api/customer/orders/:id/approve` to finalize the sale.
 </Note>
+
+---
+
+### Approve a Customer Order
+
+🔒 **Requires:** `ADMIN` role
+
+Approves a `PENDING` customer order that has an associated payment. Creates a `Sales` record (including line-item `SalesDetails`) and transitions the order status to `APPROVED`. The exchange rate and payment method are captured on the sale record.
+
+<ParamField path="id" type="string" required>
+  UUID of the `OrderCustomers` record to approve.
+</ParamField>
+
+<ParamField body="tazaUsd" type="number" required>
+  The USD/BS exchange rate at the time of approval. Used to calculate the bolivar equivalent on the `Sales` record.
+</ParamField>
+
+<ParamField body="methodPayment" type="string" required>
+  The payment method applied to this sale.
+</ParamField>
+
+<Warning>
+  Returns `400` if the order status is not `PENDING` or if the order has no linked `paymentId`. Only paid, pending orders can be approved.
+</Warning>
+
+```bash
+curl -X PATCH http://localhost:3000/api/customer/orders/<order-uuid>/approve \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tazaUsd": 36.5,
+    "methodPayment": "Pago Movil"
+  }'
+```
+
+**Response 200** — The newly created Sales record with line items:
+
+```json
+{
+  "message": "Orden aprobada exitosamente",
+  "sale": {
+    "id": "uuid",
+    "tazaUsd": 36.5,
+    "totalUsd": 7.5,
+    "paymentId": "uuid",
+    "userId": "uuid",
+    "date": "2026-06-26T12:00:00.000Z",
+    "salesDetails": [
+      {
+        "id": "uuid",
+        "cant": 1,
+        "UPriceUsd": 2.5,
+        "itemId": "uuid",
+        "serviceOrderId": null
+      }
+    ]
+  }
+}
+```
+
+---
+
+### Reject a Customer Order
+
+🔒 **Requires:** `ADMIN` role
+
+Rejects a `PENDING` customer order. All side effects are reversed atomically:
+
+- **Product inventory** is restored — the `quantity` decremented at order creation is added back.
+- **Linked service orders** are marked `CANCELLED` rather than deleted, preserving the audit trail.
+- **The order** is marked `REJECTED`.
+
+<ParamField path="id" type="string" required>
+  UUID of the `OrderCustomers` record to reject.
+</ParamField>
+
+<Warning>
+  Returns `400` if the order status is not `PENDING`. Only pending orders can be rejected.
+</Warning>
+
+```bash
+curl -X DELETE http://localhost:3000/api/customer/orders/<order-uuid>/reject \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200:**
+
+```json
+{
+  "message": "Orden rechazada y eliminada exitosamente"
+}
+```

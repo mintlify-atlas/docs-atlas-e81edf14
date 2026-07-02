@@ -1,7 +1,7 @@
 ---
 title: "Multi-Currency Configuration and Exchange Rates"
 sidebarTitle: "Multi-Currency"
-description: "SCO Autolavados handles USD and Venezuelan Bolívares (BsS) simultaneously. Exchange rates are fetched automatically from the BCV API daily and stored on the AutoLavado entity."
+description: "How SCO Autolavados handles USD and Bolivares: daily rate fetching from dolarapi.com, immutable sale stamping, and separate USD and BsS balance tracking."
 ---
 
 Venezuela's dual-currency economy requires every financial transaction to be recorded in both US Dollars (USD) and Venezuelan Bolívares Soberanos (BsS) simultaneously. SCO Autolavados treats multi-currency support as a first-class concern: exchange rates are fetched automatically from an official source, stored on the central `AutoLavado` entity, stamped immutably on each sale at the moment of transaction, and used to maintain separate running balances for each currency. This ensures that historical invoices and reports always reflect the rate that was actually in effect — not a retroactively recalculated value.
@@ -59,6 +59,7 @@ GET /api/autolavado/exchange-rate
 ```json
 {
   "tasaBs": 36.21,
+  "tasaEurBs": 39.85,
   "lastUpdate": "2024-05-15T12:00:00Z"
 }
 ```
@@ -134,7 +135,7 @@ Authorization: Bearer <token>
 ```json
 {
   "customerId": "uuid-of-customer",
-  "method": "BINANCE",
+  "method": "binance",
   "mountUSD": 12.00,
   "mountBS": 0,
   "reference": "binance-tx-ref-123"
@@ -143,15 +144,15 @@ Authorization: Bearer <token>
 
 ### Currency Rules by Payment Method
 
-| Payment Method | `mountUSD` | `mountBS` | Notes |
-|---|---|---|---|
-| Cash USD | `> 0` | `0` or `> 0` | Mixed payments allowed |
-| Cash BsS | `0` | `> 0` | |
-| Binance / USDT | `> 0` | **must be `0`** | Dollar-only; no BsS component |
-| Bank transfer | `0` | `> 0` | Typically BsS |
+| Payment Method | `method` value | `mountUSD` | `mountBS` | Notes |
+|---|---|---|---|---|
+| Cash USD / Zelle | `"cash"` / `"Zelle"` | `> 0` | `0` | USD-only methods |
+| Cash BsS / Pago Móvil | `"Efectivo"` / `"Pago Movil"` | `0` | `> 0` | BsS-only methods |
+| Binance / USDT | `"binance"` | `> 0` | **must be `0`** | Dollar-only; no BsS component |
+| Bank transfer | `"transferencia"` | `0` | `> 0` | Typically BsS |
 
 <Info>
-  For Binance payments, `mountBS` must be `0`. The backend enforces this constraint to prevent double-counting when reconciling USD and BsS balances.
+  For Binance payments, `mountBS` must be `0`. The backend checks `method === 'binance'` (case-sensitive, lowercase) and throws an error if `mountBS > 0`, preventing double-counting when reconciling USD and BsS balances.
 </Info>
 
 ---

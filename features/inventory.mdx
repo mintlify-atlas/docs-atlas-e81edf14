@@ -1,7 +1,7 @@
 ---
-title: "Inventory Management and Stock Control"
+title: "Inventory Management and Stock Control — SCO Autolavados"
 sidebarTitle: "Inventory"
-description: "Track product stock in SCO Autolavados. Items are auto-decremented when sold or used in a service order. Expenses can restock inventory while recording the outflow."
+description: "Track product stock in SCO Autolavados — items decrement on service or sale, and an expense purchase can restock inventory in a single API call."
 ---
 
 The inventory module in SCO Autolavados tracks stock levels for all physical products — cleaning chemicals, lubricants, accessories such as air fresheners, and any other item sold or consumed during services. Inventory is deeply integrated with both the sales/POS system and the service order pipeline, meaning stock is automatically decremented through normal business operations without requiring separate manual adjustments.
@@ -31,6 +31,25 @@ Content-Type: application/json
 | `priceUsd` | float | ✅ | Unit price in USD |
 | `photo` | string | ❌ | URL or path to product image |
 | `initialQuantity` | integer | ❌ | Starting stock level (defaults to `0` if omitted) |
+
+## Updating an Item
+
+To update a product's name, price, or photo, use `PUT /api/items/:id`. This is an Admin-only endpoint and also accepts `multipart/form-data` for photo uploads via Multer.
+
+```http
+PUT /api/items/:id
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Ambientador Pino Premium",
+  "priceUsd": 3.0
+}
+```
+
+All fields (`name`, `priceUsd`, `photo`) are optional — only the fields provided will be updated. This endpoint updates the `Item` record only; to change the stock quantity use `PUT /api/inventory/:itemId` instead.
 
 ## Service Resources
 

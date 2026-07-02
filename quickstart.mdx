@@ -112,10 +112,14 @@ This guide walks you through spinning up a complete SCO Autolavados environment 
     docker compose exec backend npx prisma migrate deploy
 
     # Seed the database with initial data
-    docker compose exec backend npx prisma db seed
+    docker compose exec backend npx tsx prisma/seed.ts
     ```
 
     A successful migration will print each applied migration name. The seed script creates the default `AutoLavado` configuration record, roles, and initial users so you can immediately start testing the full business flow.
+
+    <Note>
+      The `backend/package.json` does not define a `prisma.seed` configuration entry, so `npx prisma db seed` will not work. The seed file is a plain TypeScript script — run it directly with `tsx` as shown above.
+    </Note>
   </Step>
 
   <Step title="Make Your First API Call">
@@ -146,6 +150,16 @@ This guide walks you through spinning up a complete SCO Autolavados environment 
     curl http://localhost:3000/api/service-orders \
       -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     ```
+
+    <Note>
+      A `POST /api/users/refresh` endpoint is also available for token renewal. Send the `refreshToken` value (returned alongside `token` in the login response) in the request body to receive a new access token without re-authenticating:
+
+      ```bash
+      curl -X POST http://localhost:3000/api/users/refresh \
+        -H "Content-Type: application/json" \
+        -d '{"refreshToken": "<your_refresh_token>"}'
+      ```
+    </Note>
   </Step>
 </Steps>
 
