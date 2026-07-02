@@ -1,0 +1,106 @@
+---
+title: "Environment Variables and Configuration Reference"
+sidebarTitle: "Environment"
+description: "All environment variables required to run SCO Autolavados, including database connection, JWT secret, and optional settings for the backend API server."
+---
+
+SCO Autolavados reads its runtime configuration from a `.env` file located at the repository root. Docker Compose loads this file automatically at startup and injects the values into each container as environment variables. You must create this file before running `docker compose up` for the first time — the application will refuse to start if any required variable is absent.
+
+## Required Variables
+
+These variables must be present in your `.env` file. The backend validates `JWT_SECRET` explicitly at boot time and calls `process.exit(1)` if it is missing.
+
+<ParamField path="DATABASE_URL" type="string" required>
+  Full PostgreSQL connection string used by Prisma to connect to the database.
+  Use the format `postgresql://USER:PASSWORD@db:5432/DBNAME`.
+  The hostname `db` refers to the `sco_db` Docker Compose service — do not replace it with `localhost`.
+
+  **Example:** `postgresql://sco_user:supersecret@db:5432/sco_db`
+</ParamField>
+
+<ParamField path="JWT_SECRET" type="string" required>
+  Arbitrary secret string used to sign and verify JSON Web Tokens.
+  The server reads this value in `src/index.ts` and immediately calls `process.exit(1)` if it is undefined.
+  Use a long, random value — never share it publicly or commit it to version control.
+</ParamField>
+
+<ParamField path="DB_USER" type="string" required>
+  PostgreSQL username. This value is passed to the `sco_db` container as `POSTGRES_USER` to initialize the database on first run.
+
+  **Example:** `sco_user`
+</ParamField>
+
+<ParamField path="DB_PASSWORD" type="string" required>
+  PostgreSQL password for `DB_USER`. Passed to the `sco_db` container as `POSTGRES_PASSWORD`.
+
+  **Example:** `supersecret`
+</ParamField>
+
+<ParamField path="DB_NAME" type="string" required>
+  Name of the PostgreSQL database to create. Passed to the `sco_db` container as `POSTGRES_DB`. Must match the database name in `DATABASE_URL`.
+
+  **Example:** `sco_db`
+</ParamField>
+
+<Warning>
+  `JWT_SECRET` is a hard requirement. The Express server checks for this variable at startup and calls `process.exit(1)` if it is not set. No API routes will be reachable until a valid secret is provided.
+</Warning>
+
+---
+
+## Optional Variables
+
+<ParamField path="PORT" type="number" default="3000">
+  The TCP port on which the Express backend listens. Defaults to `3000` if not set.
+  The `docker-compose.yml` maps this port as `3000:3000`, so changing it requires updating both the `.env` file and the `ports` mapping in the Compose file.
+</ParamField>
+
+<ParamField path="CHOKIDAR_USEPOLLING" type="boolean" default="false">
+  Enables filesystem polling in development environments where inotify-based watching is unreliable (such as Docker on Windows or macOS with virtualized file systems).
+  This variable is already hardcoded to `true` in `docker-compose.yml` for the `backend` service — you do not need to set it manually.
+</ParamField>
+
+---
+
+## Example `.env` File
+
+Copy the block below to the repository root and fill in your own values before starting the stack.
+
+```bash .env
+# ── Database ──────────────────────────────────────────────────────────────────
+DB_USER=sco_user
+DB_PASSWORD=supersecret
+DB_NAME=sco_db
+DATABASE_URL=postgresql://sco_user:supersecret@db:5432/sco_db
+
+# ── Authentication ────────────────────────────────────────────────────────────
+JWT_SECRET=your-very-long-random-secret-here
+
+# ── Optional ──────────────────────────────────────────────────────────────────
+PORT=3000
+```
+
+<Tip>
+  Generate a cryptographically strong `JWT_SECRET` for production environments with:
+
+  ```bash
+  openssl rand -hex 32
+  ```
+
+  This produces a 64-character hexadecimal string that is extremely difficult to brute-force. Store it in a secrets manager or CI/CD secret store — never hard-code it in source files.
+</Tip>
+
+---
+
+## Variable Relationships
+
+The `DB_USER`, `DB_PASSWORD`, and `DB_NAME` values initialize the PostgreSQL container on its **first boot**. The `DATABASE_URL` must embed those same credentials and point to the `db` hostname so that Prisma (running inside the `backend` container) can reach the database over the Docker Compose internal network. A mismatch between these values is the most common cause of connection errors during first-time setup.
+
+<CardGroup cols={2}>
+  <Card title="Deployment Guide" icon="docker" href="/configuration/deployment">
+    Step-by-step instructions for running the full stack with Docker Compose.
+  </Card>
+  <Card title="Multi-Currency Configuration" icon="dollar-sign" href="/configuration/multicurrency">
+    How exchange rates are fetched and stored for USD / BsS operations.
+  </Card>
+</CardGroup>

@@ -1,20 +1,77 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "SCO Autolavados: Car Wash Management Platform"
+sidebarTitle: "Home"
+description: "SCO Autolavados is a full-stack web platform for managing car wash operations — service queues, inventory, multi-currency payments, payroll, and customer reservations."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+SCO Autolavados is an operational management system designed for car wash businesses (autolavados) in Venezuela. It provides an Admin dashboard for internal operations and a Customer-facing portal for online orders and reservations, all backed by a REST API built with Node.js, Express, Prisma ORM, and PostgreSQL. The platform handles multi-currency transactions in USD and Venezuelan Bolívares, with automatic BCV exchange rate fetching.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what SCO Autolavados is and how all the pieces fit together.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, configure environment variables, and have the system running in minutes.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/overview">
+    Explore every REST endpoint with request/response schemas and usage examples.
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Understand the client-server design, Docker setup, and database schema.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## Core Modules
+
+<CardGroup cols={3}>
+  <Card title="Users & Roles" icon="users" href="/features/users-and-roles">
+    Admin, Customer, and Laundrer roles with differentiated access flows.
+  </Card>
+  <Card title="Service Queue" icon="list-check" href="/features/service-orders">
+    Real-time wash queue with estimated wait-time algorithm.
+  </Card>
+  <Card title="Reservations" icon="calendar" href="/features/reservations">
+    Customer booking portal with auto-queue cron pipeline.
+  </Card>
+  <Card title="Inventory" icon="boxes-stacked" href="/features/inventory">
+    Stock control with automatic deduction on sales.
+  </Card>
+  <Card title="Payments & Sales" icon="money-bill" href="/features/payments-and-sales">
+    Multi-currency POS, payment approval, and invoice generation.
+  </Card>
+  <Card title="Payroll" icon="calculator" href="/features/payroll">
+    Daily commission pool calculation for laundry operators.
+  </Card>
+</CardGroup>
+
+## Get Running in 3 Steps
+
+<Steps>
+  <Step title="Clone and configure">
+    Clone the repository and copy the environment template.
+    ```bash
+    git clone https://github.com/Luisangelebp/SCO_Autolavados.git
+    cd SCO_Autolavados
+    cp .env.example .env  # Fill in DB credentials and JWT_SECRET
+    ```
+  </Step>
+  <Step title="Start with Docker Compose">
+    Spin up the database, backend API, and frontend web app.
+    ```bash
+    docker compose up --build
+    ```
+    The API is available at `http://localhost:3000` and the frontend at `http://localhost:5173`.
+  </Step>
+  <Step title="Login and explore">
+    Use the seeded admin credentials to log in and explore the dashboard.
+    ```bash
+    curl -X POST http://localhost:3000/api/users/login \
+      -H "Content-Type: application/json" \
+      -d '{"identifier": "admin", "password": "admin123"}'
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  All API endpoints are prefixed with `/api`. Authenticated endpoints require a JWT Bearer token obtained from `POST /api/users/login`.
+</Note>

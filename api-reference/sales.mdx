@@ -1,0 +1,217 @@
+---
+title: "Sales and Invoicing API Endpoints"
+sidebarTitle: "Sales"
+description: "REST endpoints for SCO Autolavados sales records — retrieve the full invoice history and create finalized sales with multi-currency totals and line-item details."
+---
+
+Sales records represent finalized invoices in SCO Autolavados. Each sale captures the USD exchange rate at the moment of transaction, links to an approved payment, and contains one or more line items — either completed service orders or physical products sold from inventory. Creating a sale atomically decrements inventory for any product line items.
+
+---
+
+## Endpoints
+
+### GET /api/sales
+
+Retrieve the full invoice history ordered by date descending. Each sale includes its nested line items (`salesDetails`) and the cashier (`user`) who registered it. If the sale is linked to a payment, the payment and customer details are also included.
+
+**Authentication:** Requires a valid JWT token (any authenticated role).
+
+```bash
+curl http://localhost:3000/api/sales \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+**Response 200 — Array of Sale objects:**
+
+```json
+[
+  {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "date": "2026-06-26T11:30:00.000Z",
+    "tazaUsd": 622.21,
+    "totalUsd": 7.5,
+    "paymentId": "p1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "userId": "u1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "user": {
+      "name": "Admin",
+      "lastName": "Sistema"
+    },
+    "payment": {
+      "method": "Pago Movil",
+      "mountUSD": 7.5,
+      "mountBS": 4666.60,
+      "approved": true,
+      "customer": {
+        "name": "María",
+        "lastName": "González"
+      }
+    },
+    "salesDetails": [
+      {
+        "id": "d1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "cant": 1,
+        "UPriceUsd": 5.0,
+        "serviceOrderId": "so1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "itemId": null,
+        "serviceOrder": {
+          "service": { "name": "Lavado Básico", "stimatedTimeMin": 30 }
+        }
+      },
+      {
+        "id": "d2b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "cant": 1,
+        "UPriceUsd": 2.5,
+        "serviceOrderId": null,
+        "itemId": "i1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "item": { "name": "Ambientador Pino Nuevo" }
+      }
+    ]
+  }
+]
+```
+
+---
+
+### POST /api/sales
+
+Register a finalized sale. This endpoint runs inside a database transaction: it creates the `Sales` record with all `SalesDetails` in a single operation and then decrements inventory for every product line item. If any product has insufficient stock, the entire transaction is rolled back and an error is returned.
+
+**Authentication:** Requires a valid JWT token with the **ADMIN** role.
+
+<Warning>
+  `tazaUsd` is stored immutably on each sale record at the moment of creation. It is **never** updated retroactively. Always fetch the current BCV rate from `GET /api/autolavado/exchange-rate` immediately before building the sale payload — do not cache a rate across requests.
+</Warning>
+
+#### Request Body
+
+<ParamField body="tazaUsd" type="number" required>
+  The USD → Bolívares exchange rate at the exact moment of the sale. Fetch this
+  from `GET /api/autolavado/exchange-rate` before calling this endpoint.
+</ParamField>
+
+<ParamField body="totalUsd" type="number" required>
+  Total sale amount in USD. Should equal the sum of `cant × UPriceUsd` across
+  all detail lines.
+</ParamField>
+
+<ParamField body="userId" type="string (UUID)" required>
+  ID of the cashier (ADMIN user) registering the sale.
+</ParamField>
+
+<ParamField body="details" type="array" required>
+  Array of line items. Must contain at least one element. Each item must include
+  either `serviceOrderId` (for a completed wash) or `itemId` (for a product from
+  inventory), but not both.
+
+  <ParamField body="details[].cant" type="number" required>
+    Quantity of units for this line item.
+  </ParamField>
+
+  <ParamField body="details[].UPriceUsd" type="number" required>
+    Unit price in USD for this line item.
+  </ParamField>
+
+  <ParamField body="details[].serviceOrderId" type="string (UUID)">
+    UUID of a `FINALIZADO` service order. Mutually exclusive with `itemId`.
+  </ParamField>
+
+  <ParamField body="details[].itemId" type="string (UUID)">
+    UUID of a product from inventory. Mutually exclusive with `serviceOrderId`.
+    The inventory quantity will be decremented by `cant` inside the transaction.
+  </ParamField>
+</ParamField>
+
+<ParamField body="paymentId" type="string (UUID)">
+  UUID of an approved `Payment` record to link to this sale. Optional — walk-in
+  cash transactions may not have a pre-registered payment.
+</ParamField>
+
+#### Example — Full sale with a service line and a product line
+
+This is the exact curl taken from the business flow at the point of checkout after María's wash and store purchase:
+
+```bash
+curl -X POST http://localhost:3000/api/sales \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "paymentId": "<ID_DEL_PAGO>",
+    "tazaUsd": 622.21,
+    "totalUsd": 7.5,
+    "userId": "<ID_DEL_ADMIN>",
+    "details": [
+      {
+        "cant": 1,
+        "UPriceUsd": 5.0,
+        "serviceOrderId": "<ID_ORDEN_SERVICIO>"
+      },
+      {
+        "cant": 1,
+        "UPriceUsd": 2.5,
+        "itemId": "<ID_AMBIENTADOR_PINO>"
+      }
+    ]
+  }'
+```
+
+**Response 201 — Newly created Sale object:**
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "date": "2026-06-26T11:30:00.000Z",
+  "tazaUsd": 622.21,
+  "totalUsd": 7.5,
+  "paymentId": "p1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "userId": "u1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "user": { "name": "Admin", "lastName": "Sistema" },
+  "salesDetails": [
+    {
+      "cant": 1,
+      "UPriceUsd": 5.0,
+      "serviceOrderId": "so1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "itemId": null
+    },
+    {
+      "cant": 1,
+      "UPriceUsd": 2.5,
+      "serviceOrderId": null,
+      "itemId": "i1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    }
+  ]
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400` / `500` | Missing required fields (`tazaUsd`, `totalUsd`, `userId`, or empty `details`) |
+| `500` | Insufficient inventory for a product line item — entire sale is rolled back |
+| `401` | Missing or invalid JWT token |
+| `403` | Caller does not have the ADMIN role |
+
+---
+
+## Sale Object Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | UUID of the sale record |
+| `date` | `string` | ISO 8601 timestamp when the sale was recorded |
+| `tazaUsd` | `number` | Exchange rate (Bs per USD) locked at sale time |
+| `totalUsd` | `number` | Total amount charged in USD |
+| `paymentId` | `string \| null` | UUID of the linked Payment, if any |
+| `userId` | `string` | UUID of the cashier who registered the sale |
+| `user` | `object` | Cashier name and lastName |
+| `payment` | `object \| null` | Linked payment details including customer info |
+| `salesDetails` | `array` | Line items — see SalesDetails below |
+
+**SalesDetails fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cant` | `number` | Quantity sold |
+| `UPriceUsd` | `number` | Unit price in USD at time of sale |
+| `serviceOrderId` | `string \| null` | Linked service order UUID (for wash lines) |
+| `itemId` | `string \| null` | Linked inventory item UUID (for product lines) |

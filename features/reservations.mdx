@@ -1,0 +1,132 @@
+---
+title: "Customer Reservations and Appointment Scheduling"
+sidebarTitle: "Reservations"
+description: "Customers can book car wash appointments online in SCO Autolavados. Confirmed reservations are automatically queued within one hour of their scheduled time via a cron job."
+---
+
+The reservations module lets customers and admins schedule car wash appointments in advance, reducing walk-in wait times and helping the business plan staffing. A key feature of the system is its **auto-queue pipeline**: a cron job periodically inspects confirmed reservations and, when an appointment is within one hour of its scheduled time, automatically creates a `ServiceOrders` entry so the vehicle appears in the queue without any manual intervention.
+
+## Reservation Status Flow
+
+Reservations progress through four states. The allowed transitions depend on the actor's role.
+
+| State | Description |
+|-------|-------------|
+| `PENDING` | Initial state when a Customer creates a reservation. Awaits admin review. |
+| `CONFIRMED` | Admin has confirmed the appointment. Eligible for auto-queue processing. Reservations created directly by an Admin start in this state. |
+| `COMPLETED` | Set automatically by the cron job after the reservation has been converted into a service order. Prevents duplicate processing. |
+| `CANCELLED` | The reservation has been cancelled. Records are never physically deleted — they remain for historical integrity. |
+
+<Note>
+  **Customers** can only set a reservation's status to `CANCELLED`. **Admins** can set any status (`PENDING`, `CONFIRMED`, `COMPLETED`, or `CANCELLED`) and can modify any reservation in the system.
+</Note>
+
+## Creating a Reservation
+
+Both Customers and Admins can create reservations. When a Customer creates one, the system validates that the specified vehicle belongs to their account before proceeding.
+
+```http
+POST /api/reservations
+Authorization: Bearer <TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "date": "2026-06-27T10:00:00.000Z",
+  "carId": "<ID_VEHICULO_ABC_12D>",
+  "serviceId": "<ID_LAVADO_COMPLETO>"
+}
+```
+
+**Response (201):** The created `Reservation` object with `status: "PENDING"` (Customer) or `status: "CONFIRMED"` (Admin).
+
+The system enforces a **maximum of 2 active reservations per time slot**. Attempting to book a third reservation for the exact same date and time will return an error: `"Este turno ya alcanzó su capacidad máxima (2 reservas)"`.
+
+## Viewing Reservations
+
+```http
+GET /api/reservations
+Authorization: Bearer <TOKEN>
+```
+
+- **Admin**: Returns all reservations across all customers, ordered by date ascending.
+- **Customer**: Returns only the reservations belonging to the authenticated user.
+
+**Optional date filter:**
+
+```http
+GET /api/reservations?date=2026-06-27
+```
+
+When `?date=YYYY-MM-DD` is provided, the response is filtered to reservations scheduled on that calendar day. Without it, all historical reservations are returned.
+
+Each reservation in the response includes the nested `car` and `service` objects for display purposes.
+
+## Auto-Queue Pipeline
+
+The cron job bridges the gap between the reservations calendar and the live operations queue. It runs every 30 minutes between **6:30 AM and 12:00 PM (VET, UTC-4)**.
+
+<Steps>
+  <Step title="Find Eligible Reservations">
+    The job queries all reservations with `status: CONFIRMED` whose scheduled `date` falls within the next 60 minutes from the current time.
+  </Step>
+  <Step title="Create a Service Order">
+    For each eligible reservation, a new `ServiceOrders` record is created with:
+    - `state: "PENDIENTE"`
+    - `timeStart`: the reservation's scheduled date/time
+    - `stimatedTimeEnd`: calculated by adding the service's `stimatedTimeMin` to `timeStart`
+    - `carId`, `serviceId`, and `userId` carried over from the reservation
+  </Step>
+  <Step title="Mark Reservation as Completed">
+    The source reservation's `status` is updated to `COMPLETED`. This prevents the cron job from processing the same reservation twice on subsequent runs.
+  </Step>
+</Steps>
+
+<Info>
+  The auto-queue window (6:30 AM–12:00 PM VET) reflects the typical operating hours of the car wash. Reservations scheduled outside this window will not be auto-queued and must be manually processed by an Admin if needed.
+</Info>
+
+## Updating a Reservation
+
+Admins and Customers can both update reservations via `PUT /api/reservations/:id`. Customers are limited to modifying their own reservations.
+
+```http
+PUT /api/reservations/:id
+Authorization: Bearer <TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "date": "2026-06-28T09:00:00.000Z",
+  "status": "CANCELLED"
+}
+```
+
+Any combination of `date`, `carId`, `serviceId`, and `status` may be included. When changing the `date`, the slot-capacity check (maximum 2 per timeslot) is re-evaluated automatically.
+
+## Soft Delete
+
+`DELETE /api/reservations/:id` does **not** physically remove the record from the database. It performs a soft delete by setting `status: "CANCELLED"`, preserving the full appointment history for reporting and audit purposes.
+
+```http
+DELETE /api/reservations/:id
+Authorization: Bearer <TOKEN>
+```
+
+**Response (200):** Success message confirming the reservation was cancelled.
+
+```http
+# Example: María cancels her reservation
+DELETE /api/reservations/<ID_RESERVA>
+Authorization: Bearer <TOKEN_MARIA>
+```
+
+<Note>
+  If a Customer attempts to delete a reservation that belongs to another user, the request is rejected with a `403 Forbidden` error. Admins can soft-delete any reservation.
+</Note>
+
+<Card title="Reservations API Reference" icon="code" href="/api-reference/reservations">
+  Full endpoint reference for reservation creation, retrieval, updates, and cancellation including request/response schemas.
+</Card>

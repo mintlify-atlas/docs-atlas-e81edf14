@@ -1,0 +1,135 @@
+---
+title: "Service Queue and Operations Management"
+sidebarTitle: "Service Orders"
+description: "Manage the real-time car wash queue in SCO Autolavados — create service orders, assign laundrers, track status from EN_ESPERA to FINALIZADO, and calculate estimated wait time."
+---
+
+Service orders are the operational core of SCO Autolavados. Every vehicle that enters the car wash generates a service order that flows through a three-state lifecycle — from the moment it joins the queue at reception, through the active wash, to final completion. The service order record ties together the vehicle, the customer, the assigned laundrer, and the service performed, creating a traceable audit trail used for productivity tracking, payroll calculation, and sales invoicing.
+
+## Order Lifecycle
+
+<Steps>
+  <Step title="EN_ESPERA — Vehicle Enters the Queue">
+    The receptionist (Admin) creates the order when the vehicle arrives. The order is assigned a `state` of `EN_ESPERA` and appears on the operations board visible to staff.
+
+    ```http
+    POST /api/service-orders
+    Authorization: Bearer <ADMIN_TOKEN>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "state": "EN_ESPERA",
+      "timeStart": "2026-06-26T10:00:00.000Z",
+      "stimatedTimeEnd": "2026-06-26T10:30:00.000Z",
+      "carId": "<ID_VEHICULO>",
+      "serviceId": "<ID_SERVICIO>",
+      "userId": "<ID_DEL_ADMIN>",
+      "comment": "Cliente pide especial atención en los rines."
+    }
+    ```
+
+    All fields except `comment` are required. `timeStart` and `stimatedTimeEnd` are ISO 8601 timestamps. The estimated end time is derived from the service's `stimatedTimeMin` value set in the service catalogue.
+  </Step>
+
+  <Step title="LAVANDO — Wash in Progress">
+    When the vehicle moves into the wash bay, an Admin assigns a laundrer and transitions the order to `LAVANDO` via the start endpoint. The system validates that the selected laundrer is not already actively washing another vehicle before accepting the assignment.
+
+    ```http
+    PATCH /api/service-orders/:id/start
+    Authorization: Bearer <ADMIN_TOKEN>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "laundrerId": "<ID_DE_PEDRO>"
+    }
+    ```
+
+    **Side effect:** If the assigned laundrer does not already have `isWorkingToday = true`, the system automatically sets it and records `lastShiftStart` with the current timestamp. This ensures the laundrer is counted in the payroll pool for the day.
+  </Step>
+
+  <Step title="FINALIZADO — Wash Complete">
+    Once the wash is finished, an Admin marks the order as complete. `timeEnd` is automatically set to the current server timestamp, enabling per-laundrer productivity reporting.
+
+    ```http
+    PATCH /api/service-orders/:id/finish
+    Authorization: Bearer <ADMIN_TOKEN>
+    ```
+
+    **Side effect:** If the service has `ServiceResource` entries (linked inventory items), the corresponding quantities are automatically decremented from stock when the order reaches `FINALIZADO`.
+  </Step>
+</Steps>
+
+<Note>
+  Only users with the **Admin** role can create or transition service orders. Customers cannot directly interact with the service order queue.
+</Note>
+
+## Estimated Wait Time Algorithm
+
+The public wait-time endpoint provides real-time queue data used by the customer-facing display and web app.
+
+```http
+GET /api/autolavado/waiting-time
+```
+
+**Response (200):**
+
+```json
+{
+  "estimatedWaitTimeMin": 45,
+  "totalStimatedTime": 90,
+  "activeLaundrers": 2,
+  "waitingOrdersCount": 3
+}
+```
+
+The formula divides the total estimated duration of all queued (`EN_ESPERA`) orders by the number of laundrers currently active on shift:
+
+```
+Estimated Wait Time = Σ(stimatedTimeMin of queued orders) ÷ Active Laundrers
+```
+
+For example, if three orders are queued with estimated durations of 30, 45, and 15 minutes (total: 90 minutes) and two laundrers are clocked in, the estimated wait is **45 minutes**. This endpoint is publicly accessible — no authentication is required — making it suitable for embedding in waiting room displays.
+
+## Laundrer Shift Management
+
+A laundrer must have an active shift before being assigned to a service order. Shifts are managed independently from order assignment.
+
+```http
+PATCH /api/laundrers/:id/shift/start
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+```http
+PATCH /api/laundrers/:id/shift/end
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+The `isWorkingToday` flag on the `User` record determines whether a laundrer:
+- Is counted as available in the wait-time calculation
+- Appears in the payroll pool at end-of-day
+
+**Midnight reset:** A scheduled cron job runs at midnight (VET, UTC-4) and resets `isWorkingToday` to `false` for all laundrers automatically, clearing the shift state for the new day.
+
+<Info>
+  When an Admin uses `PATCH /api/service-orders/:id/start` to assign a laundrer, the system will automatically activate their shift (`isWorkingToday = true`) if it wasn't already set. This allows fast assignment even if the Admin forgot to start the shift manually.
+</Info>
+
+## Admin Actions Summary
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/service-orders` | Admin | Create new order and add to queue |
+| `PATCH` | `/api/service-orders/:id/start` | Admin | Assign laundrer, transition to `LAVANDO` |
+| `PATCH` | `/api/service-orders/:id/finish` | Admin | Complete order, record `timeEnd` |
+| `PATCH` | `/api/laundrers/:id/shift/start` | Admin | Clock laundrer in for the day |
+| `PATCH` | `/api/laundrers/:id/shift/end` | Admin | Clock laundrer out |
+| `GET` | `/api/service-orders` | Admin | List all orders with filters |
+| `GET` | `/api/autolavado/waiting-time` | Public | Real-time queue wait estimate |
+
+<Card title="Service Orders API Reference" icon="code" href="/api-reference/service-orders">
+  Full endpoint reference for service order creation, state transitions, and queue management including request/response schemas.
+</Card>

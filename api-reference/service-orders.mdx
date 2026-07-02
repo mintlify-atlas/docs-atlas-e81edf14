@@ -1,0 +1,402 @@
+---
+title: "Service Orders and Laundrer Operations API"
+sidebarTitle: "Service Orders"
+description: "REST endpoints for the SCO Autolavados service queue — create orders, assign laundrers, update status, manage laundrer shifts, and get estimated wait time."
+---
+
+All protected endpoints require a valid JWT token obtained from `POST /api/users/login`. Include it in the `Authorization` header:
+
+```http
+Authorization: Bearer <your_jwt_token>
+```
+
+---
+
+## Service Orders
+
+Manage the vehicle service queue — from creation through assignment to completion.
+
+<Note>
+  **Order State Reference:**
+  - `EN_ESPERA` — Vehicle is waiting in queue
+  - `LAVANDO` — Vehicle is actively being washed
+  - `FINALIZADO` — Wash is complete
+  - `PENDIENTE` — Auto-queued from an online reservation (not yet confirmed by reception)
+
+  When a service order transitions to `FINALIZADO`, the system automatically decrements inventory for any items linked as resources to that service.
+</Note>
+
+### Get All Service Orders
+
+<ParamField query="date" type="string">
+  Filter by date in `YYYY-MM-DD` format. Returns all orders created on that day.
+</ParamField>
+
+<ParamField query="carId" type="string">
+  Filter orders by vehicle UUID.
+</ParamField>
+
+<ParamField query="userId" type="string">
+  Filter orders by the UUID of the receptionist/admin who created them.
+</ParamField>
+
+<ParamField query="laundrerId" type="string">
+  Filter orders by the UUID of the assigned laundrer.
+</ParamField>
+
+<ParamField query="page" type="number">
+  Page number for paginated results (requires `limit`).
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Number of records per page (requires `page`). When both are omitted, all records are returned.
+</ParamField>
+
+```http
+GET /api/service-orders
+Authorization: Bearer <token>
+```
+
+**Response 200** — Array of ServiceOrder objects (or paginated wrapper when `page`/`limit` are supplied):
+
+<ResponseField name="id" type="string">
+  UUID of the service order.
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  Current state: `EN_ESPERA`, `LAVANDO`, `FINALIZADO`, or `PENDIENTE`.
+</ResponseField>
+
+<ResponseField name="timeStart" type="string">
+  ISO 8601 datetime when the wash started (or is scheduled to start).
+</ResponseField>
+
+<ResponseField name="stimatedTimeEnd" type="string">
+  ISO 8601 datetime of the estimated completion.
+</ResponseField>
+
+<ResponseField name="timeEnd" type="string | null">
+  ISO 8601 datetime when the wash actually finished. `null` until finalized.
+</ResponseField>
+
+<ResponseField name="comment" type="string | null">
+  Optional note left by the receptionist.
+</ResponseField>
+
+<ResponseField name="car" type="object">
+  Nested vehicle object (`plate`, `mark`, `model`, `color`, `year`).
+</ResponseField>
+
+<ResponseField name="service" type="object">
+  Nested service object (`name`, `priceUsd`, `stimatedTimeMin`).
+</ResponseField>
+
+<ResponseField name="laundrer" type="object | null">
+  Nested user object for the assigned laundrer. `null` until a laundrer is assigned.
+</ResponseField>
+
+```json
+[
+  {
+    "id": "uuid",
+    "state": "LAVANDO",
+    "timeStart": "2026-06-26T10:00:00.000Z",
+    "stimatedTimeEnd": "2026-06-26T10:30:00.000Z",
+    "timeEnd": null,
+    "comment": "Cliente pide atención especial en los rines",
+    "date": "2026-06-26T10:00:00.000Z",
+    "carId": "uuid",
+    "car": { "plate": "ABC12D", "mark": "Toyota", "model": "Corolla" },
+    "serviceId": "uuid",
+    "service": { "name": "Lavado Básico", "priceUsd": 3.0 },
+    "laundrerId": "uuid",
+    "laundrer": { "name": "Pedro", "lastName": "González" }
+  }
+]
+```
+
+---
+
+### Create a Service Order
+
+🔒 **Requires:** `ADMIN` role
+
+<ParamField body="state" type="string" required>
+  Initial state for the order. Typically `EN_ESPERA` when created from reception.
+</ParamField>
+
+<ParamField body="timeStart" type="string" required>
+  ISO 8601 datetime for when the service is scheduled to begin (e.g. `2026-06-26T10:00:00.000Z`).
+</ParamField>
+
+<ParamField body="stimatedTimeEnd" type="string" required>
+  ISO 8601 datetime for the estimated end time.
+</ParamField>
+
+<ParamField body="carId" type="string" required>
+  UUID of the vehicle being washed.
+</ParamField>
+
+<ParamField body="serviceId" type="string" required>
+  UUID of the service to be performed (e.g. "Lavado Básico").
+</ParamField>
+
+<ParamField body="userId" type="string" required>
+  UUID of the receptionist or admin creating the order.
+</ParamField>
+
+<ParamField body="comment" type="string">
+  Optional note about special customer requests or vehicle condition.
+</ParamField>
+
+```bash
+curl -X POST http://localhost:3000/api/service-orders \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "state": "EN_ESPERA",
+    "timeStart": "2026-06-26T10:00:00.000Z",
+    "stimatedTimeEnd": "2026-06-26T10:30:00.000Z",
+    "carId": "<vehicle-uuid>",
+    "serviceId": "<service-uuid>",
+    "userId": "<admin-uuid>",
+    "comment": "Cliente pide atención especial en los rines"
+  }'
+```
+
+**Response 201** — The newly created ServiceOrder object:
+
+```json
+{
+  "id": "uuid",
+  "state": "EN_ESPERA",
+  "timeStart": "2026-06-26T10:00:00.000Z",
+  "stimatedTimeEnd": "2026-06-26T10:30:00.000Z",
+  "timeEnd": null,
+  "comment": "Cliente pide atención especial en los rines",
+  "date": "2026-06-26T10:00:00.000Z",
+  "carId": "uuid",
+  "serviceId": "uuid",
+  "userId": "uuid",
+  "laundrerId": null
+}
+```
+
+---
+
+### Update Order State
+
+🔒 **Requires:** `ADMIN` role
+
+Manually set the state of any service order. For a more structured workflow, prefer the dedicated `/start` and `/finish` endpoints.
+
+<ParamField path="id" type="string" required>
+  UUID of the service order to update.
+</ParamField>
+
+<ParamField body="state" type="string" required>
+  The new state value. One of: `EN_ESPERA`, `LAVANDO`, `FINALIZADO`, `PENDIENTE`.
+</ParamField>
+
+<Warning>
+  Setting state to `FINALIZADO` via this endpoint will automatically record `timeEnd` and decrement inventory for any resources linked to the service. Avoid manually setting `FINALIZADO` if you want consistent `timeEnd` tracking — use `PATCH /api/service-orders/:id/finish` instead.
+</Warning>
+
+```bash
+curl -X PATCH http://localhost:3000/api/service-orders/<order-uuid>/state \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "state": "FINALIZADO" }'
+```
+
+**Response 200** — Updated ServiceOrder object.
+
+---
+
+### Start a Service Order (Assign Laundrer)
+
+🔒 **Requires:** `ADMIN` role
+
+Assigns a laundrer to the order and transitions its state to `LAVANDO`. Also records `timeStart` as the actual wash-start time and automatically marks the laundrer as `isWorkingToday: true`.
+
+<ParamField path="id" type="string" required>
+  UUID of the service order.
+</ParamField>
+
+<ParamField body="laundrerId" type="string" required>
+  UUID of the laundrer (User with role `LAUNDRER`) to assign to this order.
+</ParamField>
+
+<Warning>
+  Returns `500` if the specified laundrer already has another order in `LAVANDO` state. A laundrer can only actively wash one vehicle at a time.
+</Warning>
+
+```bash
+curl -X PATCH http://localhost:3000/api/service-orders/<order-uuid>/start \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "laundrerId": "<laundrer-uuid>" }'
+```
+
+**Response 200** — Updated ServiceOrder object with `state: "LAVANDO"` and `laundrerId` set.
+
+```json
+{
+  "id": "uuid",
+  "state": "LAVANDO",
+  "timeStart": "2026-06-26T10:05:22.000Z",
+  "stimatedTimeEnd": "2026-06-26T10:30:00.000Z",
+  "timeEnd": null,
+  "laundrerId": "uuid",
+  "carId": "uuid",
+  "serviceId": "uuid",
+  "userId": "uuid"
+}
+```
+
+---
+
+### Finish a Service Order
+
+🔒 **Requires:** `ADMIN` role
+
+Marks a service order as complete. Records `timeEnd` as the current timestamp, sets state to `FINALIZADO`, and automatically decrements inventory for any items listed as service resources.
+
+<ParamField path="id" type="string" required>
+  UUID of the service order to finalize.
+</ParamField>
+
+```bash
+curl -X PATCH http://localhost:3000/api/service-orders/<order-uuid>/finish \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200** — Updated ServiceOrder object with `state: "FINALIZADO"` and `timeEnd` populated:
+
+```json
+{
+  "id": "uuid",
+  "state": "FINALIZADO",
+  "timeStart": "2026-06-26T10:05:22.000Z",
+  "stimatedTimeEnd": "2026-06-26T10:30:00.000Z",
+  "timeEnd": "2026-06-26T10:28:45.000Z",
+  "laundrerId": "uuid",
+  "carId": "uuid",
+  "serviceId": "uuid",
+  "userId": "uuid"
+}
+```
+
+---
+
+## Laundrer Shift Management
+
+Control which laundrers are active and counted in the wait-time algorithm and daily payroll calculations.
+
+### Start a Laundrer's Shift
+
+🔒 **Requires:** `ADMIN` role
+
+Marks a laundrer as working today by setting `isWorkingToday = true` and recording `lastShiftStart`. Active laundrers are included in the estimated wait-time algorithm and the daily payroll pool.
+
+<ParamField path="id" type="string" required>
+  UUID of the laundrer (User with role `LAUNDRER`).
+</ParamField>
+
+<Warning>
+  Returns `400` if the user UUID does not correspond to a user with the `LAUNDRER` role.
+</Warning>
+
+```bash
+curl -X PATCH http://localhost:3000/api/laundrers/<laundrer-uuid>/shift/start \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200:**
+
+```json
+{
+  "message": "Turno iniciado exitosamente",
+  "laundrer": {
+    "id": "uuid",
+    "name": "Pedro",
+    "lastName": "González",
+    "isWorkingToday": true,
+    "lastShiftStart": "2026-06-26T08:00:00.000Z"
+  }
+}
+```
+
+---
+
+### End a Laundrer's Shift
+
+🔒 **Requires:** `ADMIN` role
+
+Marks a laundrer as off-shift by setting `isWorkingToday = false`. The laundrer will no longer be counted in the wait-time estimate or the daily payroll pool.
+
+<ParamField path="id" type="string" required>
+  UUID of the laundrer.
+</ParamField>
+
+```bash
+curl -X PATCH http://localhost:3000/api/laundrers/<laundrer-uuid>/shift/end \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200:**
+
+```json
+{
+  "message": "Turno finalizado exitosamente",
+  "laundrer": {
+    "id": "uuid",
+    "name": "Pedro",
+    "lastName": "González",
+    "isWorkingToday": false
+  }
+}
+```
+
+---
+
+### Get Estimated Wait Time
+
+**Public endpoint — no authentication required.**
+
+Returns the dynamic estimated wait time based on the current queue depth and the number of laundrers who are actively on shift (`isWorkingToday: true`). This endpoint powers the customer-facing waiting display.
+
+```bash
+curl http://localhost:3000/api/autolavado/waiting-time
+```
+
+**Response 200:**
+
+<ResponseField name="estimatedWaitTimeMin" type="number">
+  Estimated minutes until the next available laundrer is free to start a new vehicle.
+</ResponseField>
+
+<ResponseField name="totalStimatedTime" type="number">
+  Total estimated minutes until the last vehicle currently in the queue is finished.
+</ResponseField>
+
+<ResponseField name="activeLaundrers" type="number">
+  Number of laundrers currently on shift (`isWorkingToday: true`).
+</ResponseField>
+
+<ResponseField name="waitingOrdersCount" type="number">
+  Number of orders currently in `EN_ESPERA` state.
+</ResponseField>
+
+```json
+{
+  "estimatedWaitTimeMin": 45,
+  "totalStimatedTime": 90,
+  "activeLaundrers": 2,
+  "waitingOrdersCount": 3
+}
+```
+
+<Note>
+  If `activeLaundrers` is `0`, the wait time calculation cannot proceed. Ensure at least one laundrer has started their shift before opening the queue.
+</Note>

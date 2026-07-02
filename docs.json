@@ -1,72 +1,86 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "SCO Autolavados",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#3b82f6",
+    "light": "#f8fafc",
+    "dark": "#0f172a"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/Luisangelebp/SCO_Autolavados"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/Luisangelebp/SCO_Autolavados"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/users-and-roles",
+              "features/service-orders",
+              "features/reservations",
+              "features/inventory",
+              "features/payments-and-sales",
+              "features/payroll",
+              "features/dashboard"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment",
+              "configuration/deployment",
+              "configuration/multicurrency"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api-reference/users",
+              "api-reference/vehicles",
+              "api-reference/services",
+              "api-reference/service-orders",
+              "api-reference/inventory",
+              "api-reference/payments",
+              "api-reference/sales",
+              "api-reference/reservations",
+              "api-reference/payroll",
+              "api-reference/autolavado",
+              "api-reference/dashboard"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

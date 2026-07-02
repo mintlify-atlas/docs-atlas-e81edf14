@@ -1,0 +1,574 @@
+---
+title: "Users and Roles API Endpoints"
+sidebarTitle: "Users"
+description: "REST endpoints for user management in SCO Autolavados — login, registration, cedula lookup, user update with photo upload, and role filtering."
+---
+
+## Overview
+
+The Users API handles authentication, account creation, profile management, and role-based access control for SCO Autolavados. Three registration paths exist:
+
+- **Online self-registration** — customers create their own account via `POST /api/users/register`.
+- **Reception quick-registration** — admin staff create walk-in accounts (no email/password required) via `POST /api/users/admin`.
+- **Account activation** — a previously reception-created user later activates their account online through `POST /api/users/register` using the same `cedula`.
+
+### Authentication
+
+Protected endpoints require a **Bearer JWT** token obtained from `POST /api/users/login`. Access tokens expire in **15 minutes**; use the refresh token flow to obtain a new one.
+
+```http
+Authorization: Bearer <your_jwt_token>
+```
+
+<Note>
+Access tokens are valid for **15 minutes**. Refresh tokens are valid for **7 days**. Use `POST /api/users/refresh` with `{ "refreshToken": "..." }` to silently obtain a new access token without requiring the user to log in again.
+</Note>
+
+---
+
+## User Object
+
+All user endpoints that return a user return this shape. The `hashPassword` field is **always stripped** from API responses.
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "cedula": "V12345678",
+  "name": "Juan",
+  "lastName": "Pérez",
+  "phone": "04141234567",
+  "user": "juanperez",
+  "email": "juan@example.com",
+  "photo": null,
+  "status": true,
+  "isWorkingToday": false,
+  "createdAt": "2026-06-01T10:00:00.000Z",
+  "role": { "id": "uuid", "name": "CUSTOMER" }
+}
+```
+
+<ResponseField name="id" type="string">
+  UUID primary key of the user.
+</ResponseField>
+
+<ResponseField name="cedula" type="string">
+  National ID or tax ID. Must start with `V`, `E`, `J`, or `G` (e.g. `V12345678`).
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  User's first name.
+</ResponseField>
+
+<ResponseField name="lastName" type="string">
+  User's last name.
+</ResponseField>
+
+<ResponseField name="phone" type="string">
+  Contact phone number (e.g. `04141234567`).
+</ResponseField>
+
+<ResponseField name="user" type="string | null">
+  Unique username. Only set when the account has been activated with email/password.
+</ResponseField>
+
+<ResponseField name="email" type="string | null">
+  Unique email address. Only set when the account has been activated with email/password.
+</ResponseField>
+
+<ResponseField name="photo" type="string | null">
+  Stored filename of the uploaded profile photo, or `null` if none.
+</ResponseField>
+
+<ResponseField name="status" type="boolean">
+  Whether the account is active. Defaults to `true`.
+</ResponseField>
+
+<ResponseField name="isWorkingToday" type="boolean">
+  Only meaningful for `LAUNDRER` role — `true` when the employee has an active shift.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (ISO 8601)">
+  Timestamp of account creation.
+</ResponseField>
+
+<ResponseField name="role" type="object">
+  Embedded role object `{ id, name }`.
+</ResponseField>
+
+---
+
+## Endpoints
+
+### `POST /api/users/login`
+
+Authenticates a user by email or username and returns a JWT access token and a refresh token.
+
+```bash
+curl -X POST http://localhost:3000/api/users/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "identifier": "juan@example.com",
+    "password": "mi_password_seguro"
+  }'
+```
+
+**Request body:**
+
+<ParamField body="identifier" type="string" required>
+  The user's registered **email address** or **username** (`user` field).
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's plain-text password. Compared against the bcrypt hash stored in the database.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "email": "juan@example.com",
+    "role": { "id": "uuid", "name": "CUSTOMER" }
+  }
+}
+```
+
+<ResponseField name="token" type="string">
+  Short-lived JWT access token (expires in 15 minutes). Send as `Authorization: Bearer <token>` on protected requests.
+</ResponseField>
+
+<ResponseField name="refreshToken" type="string">
+  Long-lived refresh token (expires in 7 days). Use with `POST /api/users/refresh` to get a new access token.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  Partial user object with `id`, `email`, and the nested `role` object.
+</ResponseField>
+
+**Error `401 Unauthorized`** — Invalid credentials or account not yet activated (no password set).
+
+---
+
+### `GET /api/users` <Icon icon="lock" /> ADMIN
+
+Returns a paginated list of all users in the system, ordered by most recently created. **Requires a valid JWT from an ADMIN account.**
+
+```bash
+curl http://localhost:3000/api/users?cant=20&page=1 \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+**Query parameters:**
+
+<ParamField query="cant" type="number">
+  Number of records per page. Defaults to `10`. Must be a positive integer.
+</ParamField>
+
+<ParamField query="page" type="number">
+  Page number (1-indexed). Defaults to `1`.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{
+  "users": [
+    {
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "cedula": "V12345678",
+      "name": "Juan",
+      "lastName": "Pérez",
+      "phone": "04141234567",
+      "user": "juanperez",
+      "email": "juan@example.com",
+      "photo": null,
+      "status": true,
+      "isWorkingToday": false,
+      "createdAt": "2026-06-01T10:00:00.000Z",
+      "role": { "id": "uuid", "name": "CUSTOMER" }
+    }
+  ],
+  "total": 42
+}
+```
+
+<ResponseField name="users" type="array">
+  Array of User objects (see User Object above).
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total count of all users in the database (useful for building pagination UI).
+</ResponseField>
+
+---
+
+### `GET /api/users/role/:roleName`
+
+Returns all users that belong to a specific role. The lookup is **case-insensitive** — `CUSTOMER`, `customer`, and `Customer` all match the same role.
+
+```bash
+curl http://localhost:3000/api/users/role/CUSTOMER
+```
+
+**Path parameters:**
+
+<ParamField path="roleName" type="string" required>
+  Name of the role to filter by. Built-in system roles are `ADMIN`, `CUSTOMER`, and `LAUNDRER`. The match is case-insensitive.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+[
+  {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "cedula": "V12345678",
+    "name": "Juan",
+    "lastName": "Pérez",
+    "phone": "04141234567",
+    "user": "juanperez",
+    "email": "juan@example.com",
+    "photo": null,
+    "status": true,
+    "isWorkingToday": false,
+    "createdAt": "2026-06-01T10:00:00.000Z",
+    "role": { "id": "uuid", "name": "CUSTOMER" }
+  }
+]
+```
+
+Returns an empty array `[]` if no users match the given role name.
+
+---
+
+### `GET /api/users/check/:cedula`
+
+Checks whether a `cedula` (national ID) already exists in the database. Designed for the online registration form auto-fill flow: if the user was pre-created at the reception desk, their name and phone number can be pre-populated.
+
+```bash
+curl http://localhost:3000/api/users/check/V12345678
+```
+
+**Path parameters:**
+
+<ParamField path="cedula" type="string" required>
+  The cedula or RIF to look up (e.g. `V12345678`, `J123456789`).
+</ParamField>
+
+**Response `200 OK`** — User was found:
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "cedula": "V12345678",
+  "name": "Juan",
+  "lastName": "Pérez",
+  "phone": "04141234567",
+  "user": null,
+  "email": null,
+  "photo": null,
+  "status": true,
+  "isWorkingToday": false,
+  "createdAt": "2026-06-01T10:00:00.000Z",
+  "role": { "id": "uuid", "name": "CUSTOMER" }
+}
+```
+
+**Response `404 Not Found`** — Cedula does not exist:
+
+```json
+{ "error": "Usuario no encontrado" }
+```
+
+---
+
+### `POST /api/users/register`
+
+Online self-registration for customers. Supports two flows:
+
+1. **New user** — Creates a brand-new `CUSTOMER` account from scratch.
+2. **Account activation** — If a user was pre-created at the reception desk (via `POST /api/users/admin`) and has no email yet, this endpoint activates their account by adding email, username, and a hashed password.
+
+Supports `multipart/form-data` for optional profile photo upload alongside the JSON fields.
+
+```bash
+curl -X POST http://localhost:3000/api/users/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cedula": "V12345678",
+    "name": "Juan",
+    "lastName": "Pérez",
+    "phone": "04141234567",
+    "email": "juan@example.com",
+    "user": "juanperez",
+    "password": "mi_password_seguro"
+  }'
+```
+
+**Request body:**
+
+<ParamField body="cedula" type="string" required>
+  National ID or RIF. Must start with `V`, `E`, `J`, or `G`. Used as the unique lookup key to determine new vs. activation flow.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  User's first name.
+</ParamField>
+
+<ParamField body="lastName" type="string" required>
+  User's last name.
+</ParamField>
+
+<ParamField body="phone" type="string" required>
+  Contact phone number.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Unique email address.
+</ParamField>
+
+<ParamField body="user" type="string" required>
+  Desired unique username.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Hashed with bcrypt (salt rounds: 10) before storage.
+</ParamField>
+
+<ParamField body="photo" type="file">
+  Optional profile photo. Send as `multipart/form-data`. The stored filename is saved to the `photo` field.
+</ParamField>
+
+**Response `201 Created`:**
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "cedula": "V12345678",
+  "name": "Juan",
+  "lastName": "Pérez",
+  "phone": "04141234567",
+  "user": "juanperez",
+  "email": "juan@example.com",
+  "photo": null,
+  "status": true,
+  "isWorkingToday": false,
+  "createdAt": "2026-06-01T10:00:00.000Z",
+  "role": { "id": "uuid", "name": "CUSTOMER" }
+}
+```
+
+<Warning>
+If the cedula already has an email associated (i.e. the account is already fully active), the request will fail with a `500` error: `"El usuario ya se encuentra registrado y activo con un correo electrónico"`.
+</Warning>
+
+---
+
+### `POST /api/users/admin` <Icon icon="lock" /> ADMIN
+
+Quick-registration flow for walk-in customers or new staff at the physical reception desk. Does **not** require email or password — the account can be activated later by the user via `POST /api/users/register`.
+
+```bash
+curl -X POST http://localhost:3000/api/users/admin \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Juan",
+    "lastName": "Pérez",
+    "roleId": "uuid-del-rol",
+    "cedula": "V12345678",
+    "phone": "04141234567"
+  }'
+```
+
+**Request body:**
+
+<ParamField body="name" type="string" required>
+  User's first name.
+</ParamField>
+
+<ParamField body="lastName" type="string" required>
+  User's last name.
+</ParamField>
+
+<ParamField body="roleId" type="string" required>
+  UUID of the role to assign. Obtain valid role UUIDs from `GET /api/roles`.
+</ParamField>
+
+<ParamField body="cedula" type="string" required>
+  National ID or RIF. Must start with `V`, `E`, `J`, or `G`.
+</ParamField>
+
+<ParamField body="phone" type="string" required>
+  Contact phone number.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Optional email address if already known at registration time.
+</ParamField>
+
+<ParamField body="user" type="string">
+  Optional username.
+</ParamField>
+
+<ParamField body="password" type="string">
+  Optional plain-text password (will be hashed). Usually omitted in the quick-registration flow.
+</ParamField>
+
+**Response `201 Created`:**
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "cedula": "V12345678",
+  "name": "Juan",
+  "lastName": "Pérez",
+  "phone": "04141234567",
+  "user": null,
+  "email": null,
+  "photo": null,
+  "status": true,
+  "isWorkingToday": false,
+  "createdAt": "2026-06-01T10:00:00.000Z",
+  "roleId": "uuid-del-rol"
+}
+```
+
+<Note>
+The response from `POST /api/users/admin` does not include the expanded `role` object — only the raw `roleId`. Use `GET /api/users/role/:roleName` or `GET /api/users` to retrieve users with their role details.
+</Note>
+
+---
+
+### `PATCH /api/users/:id` <Icon icon="lock" /> ADMIN or same user
+
+Updates one or more fields of an existing user account. An **ADMIN** can update any user; a **CUSTOMER** can only update their own profile (enforced server-side by comparing the JWT `id` claim against the path `:id`).
+
+Supports both `application/json` and `multipart/form-data` (required when uploading a photo).
+
+```bash
+# Update name only (JSON)
+curl -X PATCH http://localhost:3000/api/users/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "Juan Carlos" }'
+
+# Upload a new profile photo (multipart)
+curl -X PATCH http://localhost:3000/api/users/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
+  -H "Authorization: Bearer <token>" \
+  -F "name=Juan Carlos" \
+  -F "photo=@/path/to/photo.jpg"
+```
+
+**Path parameters:**
+
+<ParamField path="id" type="string" required>
+  UUID of the user to update.
+</ParamField>
+
+**Request body (all fields optional — send only those you want to change):**
+
+<ParamField body="name" type="string">
+  New first name.
+</ParamField>
+
+<ParamField body="lastName" type="string">
+  New last name.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  New phone number.
+</ParamField>
+
+<ParamField body="email" type="string">
+  New unique email address.
+</ParamField>
+
+<ParamField body="user" type="string">
+  New unique username.
+</ParamField>
+
+<ParamField body="password" type="string">
+  New plain-text password. Will be hashed with bcrypt before storage.
+</ParamField>
+
+<ParamField body="photo" type="file">
+  New profile photo file (multipart only).
+</ParamField>
+
+<ParamField body="status" type="boolean">
+  Account active/inactive flag. ADMIN only in practice.
+</ParamField>
+
+<ParamField body="roleId" type="string">
+  UUID of the new role to assign. ADMIN only in practice.
+</ParamField>
+
+**Response `200 OK`:** Updated User object (see User Object above).
+
+**Error `403 Forbidden`** — A non-admin user attempts to edit another user's profile:
+
+```json
+{ "error": "No tienes permiso para editar a este usuario" }
+```
+
+---
+
+### `GET /api/roles`
+
+Returns the list of all available roles in the system. No authentication required.
+
+```bash
+curl http://localhost:3000/api/roles
+```
+
+**Response `200 OK`:**
+
+```json
+[
+  { "id": "uuid-admin", "name": "ADMIN" },
+  { "id": "uuid-customer", "name": "CUSTOMER" },
+  { "id": "uuid-laundrer", "name": "LAUNDRER" }
+]
+```
+
+<ResponseField name="id" type="string">
+  UUID of the role. Use this value as `roleId` when creating users via `POST /api/users/admin`.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Role name. System roles are `ADMIN`, `CUSTOMER`, and `LAUNDRER`.
+</ResponseField>
+
+<Tip>
+Call `GET /api/roles` when building role selector dropdowns in the admin UI. The returned `id` values are the UUIDs you need for `roleId` in user creation endpoints.
+</Tip>
+
+---
+
+### `POST /api/users/refresh`
+
+Exchanges a valid refresh token for a new short-lived access token, without requiring the user to log in again.
+
+```bash
+curl -X POST http://localhost:3000/api/users/refresh \
+  -H "Content-Type: application/json" \
+  -d '{ "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." }'
+```
+
+**Request body:**
+
+<ParamField body="refreshToken" type="string" required>
+  The refresh token previously received from `POST /api/users/login`.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{ "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." }
+```
+
+**Error `401 Unauthorized`** — Refresh token is missing, expired, or invalid.

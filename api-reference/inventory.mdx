@@ -1,0 +1,299 @@
+---
+title: "Inventory and Products API Endpoints"
+sidebarTitle: "Inventory"
+description: "REST endpoints for SCO Autolavados inventory — create products, update stock levels, and record expenses that restock items while tracking outflows."
+---
+
+All protected endpoints require a valid JWT token obtained from `POST /api/users/login`. Include it in the `Authorization` header:
+
+```http
+Authorization: Bearer <your_jwt_token>
+```
+
+---
+
+## Products (Items)
+
+Products (referred to as `Item` in the database) represent physical goods sold at the autolavado — air fresheners, wax, polish, etc. Every item automatically gets an `Inventory` record that tracks its current stock quantity.
+
+### Get All Products
+
+🔒 **Requires:** Any authenticated user
+
+Returns the full product catalog, with each item's current inventory stock nested inside.
+
+```bash
+curl http://localhost:3000/api/items \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200** — Array of Item objects with nested inventory:
+
+<ResponseField name="id" type="string">
+  UUID of the product.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Product name (unique across all items).
+</ResponseField>
+
+<ResponseField name="priceUsd" type="number">
+  Unit sale price in USD.
+</ResponseField>
+
+<ResponseField name="photo" type="string | null">
+  Filename or URL of the product photo. `null` if no image has been uploaded.
+</ResponseField>
+
+<ResponseField name="inventory" type="object">
+  Nested inventory record containing `id`, `itemId`, and `quantity` (current stock).
+</ResponseField>
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Ambientador Pino",
+    "priceUsd": 2.5,
+    "photo": null,
+    "inventory": {
+      "id": "uuid",
+      "itemId": "uuid",
+      "quantity": 10
+    }
+  }
+]
+```
+
+---
+
+### Create a Product
+
+🔒 **Requires:** `ADMIN` role
+
+Creates a new product and automatically creates its linked `Inventory` record in a single atomic transaction. The `initialQuantity` sets the opening stock.
+
+<ParamField body="name" type="string" required>
+  Unique name for the product (e.g. `"Ambientador Pino"`). Names must be unique across all items.
+</ParamField>
+
+<ParamField body="priceUsd" type="number" required>
+  Unit sale price in USD.
+</ParamField>
+
+<ParamField body="photo" type="string">
+  Optional URL or filename of the product image. Can also be uploaded as `multipart/form-data` with a `photo` file field.
+</ParamField>
+
+<ParamField body="initialQuantity" type="number">
+  Starting stock count. Defaults to `0` if not provided.
+</ParamField>
+
+```bash
+curl -X POST http://localhost:3000/api/items \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ambientador Pino",
+    "priceUsd": 2.5,
+    "initialQuantity": 10
+  }'
+```
+
+**Response 201** — The newly created Item object:
+
+```json
+{
+  "id": "uuid",
+  "name": "Ambientador Pino",
+  "priceUsd": 2.5,
+  "photo": null,
+  "inventory": {
+    "id": "uuid",
+    "itemId": "uuid",
+    "quantity": 10
+  }
+}
+```
+
+<Note>
+  Photo uploads are supported via `multipart/form-data`. When uploading a file, include the image as a `photo` field in the form data alongside the other text fields.
+</Note>
+
+---
+
+## Inventory Stock
+
+Directly manage the stock quantity for an existing product.
+
+### Update Stock Quantity
+
+🔒 **Requires:** `ADMIN` role
+
+Directly sets the stock quantity for a product's inventory record. This is an absolute assignment — it replaces the current quantity rather than incrementing or decrementing it.
+
+<ParamField path="itemId" type="string" required>
+  UUID of the **Item** (product), not the Inventory record. Use the `id` field returned from `GET /api/items`.
+</ParamField>
+
+<ParamField body="quantity" type="number" required>
+  The new absolute stock count to set (e.g. `15` will set stock to exactly 15, regardless of current value).
+</ParamField>
+
+```bash
+curl -X PUT http://localhost:3000/api/inventory/<item-uuid> \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "quantity": 15 }'
+```
+
+**Response 200** — Updated Inventory object:
+
+```json
+{
+  "id": "uuid",
+  "itemId": "uuid",
+  "quantity": 15
+}
+```
+
+<Note>
+  **Automatic stock decrements occur when:**
+
+  - **(a)** An item is sold via `POST /api/sales` — the quantity is decremented as part of the sale record.
+  - **(b)** A customer places a product in their web order via `POST /api/customer/orders` — inventory is decremented immediately upon order creation, before payment.
+  - **(c)** A service order is finalized via `PATCH /api/service-orders/:id/finish` — any items defined as service resources are automatically decremented.
+
+  Use `PUT /api/inventory/:itemId` only for manual corrections, opening stock, or physical count adjustments.
+</Note>
+
+---
+
+## Expenses
+
+Record financial outflows from the business. Expenses automatically deduct from the AutoLavado's general balance. When an expense is linked to a product (`itemId`) with a `quantity`, it also restocks that product's inventory — making this the recommended way to record purchases.
+
+### Get All Expenses
+
+🔒 **Requires:** `ADMIN` role
+
+Returns the full expense history, ordered by most recent first. Each expense includes the linked item details if an `itemId` was provided.
+
+```bash
+curl http://localhost:3000/api/expenses \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response 200** — Array of Expense objects:
+
+<ResponseField name="id" type="string">
+  UUID of the expense record.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description of what was purchased or spent.
+</ResponseField>
+
+<ResponseField name="amountUSD" type="number">
+  Amount spent in USD. Deducted from the autolavado's USD balance.
+</ResponseField>
+
+<ResponseField name="amountBS" type="number">
+  Amount spent in bolívares. Deducted from the autolavado's BS balance. Use `0` if not applicable.
+</ResponseField>
+
+<ResponseField name="quantity" type="number | null">
+  Number of units purchased. Used to restock inventory when `itemId` is also provided.
+</ResponseField>
+
+<ResponseField name="itemId" type="string | null">
+  UUID of the restocked product. `null` for general expenses (utilities, fuel, etc.).
+</ResponseField>
+
+<ResponseField name="date" type="string">
+  ISO 8601 datetime when the expense was recorded (auto-generated).
+</ResponseField>
+
+```json
+[
+  {
+    "id": "uuid",
+    "description": "Compra de 10 ambientadores",
+    "amountUSD": 25.0,
+    "amountBS": 0,
+    "quantity": 10,
+    "itemId": "uuid",
+    "date": "2026-06-26T15:00:00.000Z",
+    "item": {
+      "id": "uuid",
+      "name": "Ambientador Pino",
+      "priceUsd": 2.5
+    }
+  }
+]
+```
+
+---
+
+### Create an Expense
+
+🔒 **Requires:** `ADMIN` role
+
+Records a new expense. The following side effects occur atomically in a single database transaction:
+
+1. An `Expense` record is created.
+2. The specified amounts are deducted from the AutoLavado's `balanceUsd` and `balanceBs`.
+3. If `itemId` and `quantity` are provided, the item's inventory stock is **incremented** by `quantity`.
+
+<ParamField body="description" type="string" required>
+  A clear description of the expense (e.g. `"Compra de 10 ambientadores pino"`).
+</ParamField>
+
+<ParamField body="amountUSD" type="number" required>
+  Amount in USD to deduct from the business balance.
+</ParamField>
+
+<ParamField body="amountBS" type="number" required>
+  Amount in bolívares to deduct from the business balance. Pass `0` if the purchase was made entirely in USD.
+</ParamField>
+
+<ParamField body="quantity" type="number">
+  Optional number of units purchased. If provided alongside `itemId`, the linked product's stock will be restocked by this amount.
+</ParamField>
+
+<ParamField body="itemId" type="string">
+  Optional UUID of the product being restocked. Use the `id` from `GET /api/items`. Has no effect if `quantity` is not also provided.
+</ParamField>
+
+```bash
+curl -X POST http://localhost:3000/api/expenses \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Compra de 10 ambientadores",
+    "amountUSD": 25.0,
+    "amountBS": 0,
+    "quantity": 10,
+    "itemId": "<item-uuid>"
+  }'
+```
+
+**Response 201** — The newly created Expense object:
+
+```json
+{
+  "id": "uuid",
+  "description": "Compra de 10 ambientadores",
+  "amountUSD": 25.0,
+  "amountBS": 0,
+  "quantity": 10,
+  "itemId": "uuid",
+  "date": "2026-06-26T15:00:00.000Z"
+}
+```
+
+<Tip>
+  **Recommended restocking workflow:** Always link an expense to an `itemId` when recording product purchases. This is the canonical way to restock inventory in SCO Autolavados — it simultaneously updates financial records and product stock in a single atomic operation, ensuring your balance and inventory never fall out of sync.
+
+  For manual stock corrections (e.g. after a physical count), use `PUT /api/inventory/:itemId` directly instead.
+</Tip>

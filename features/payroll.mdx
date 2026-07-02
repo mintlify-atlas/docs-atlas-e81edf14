@@ -1,0 +1,165 @@
+---
+title: "Payroll and Laundrer Commission Calculation"
+sidebarTitle: "Payroll"
+description: "SCO Autolavados calculates daily laundrer commissions via a pool system. Admins can view and export payroll for any date using the GET /api/payroll/daily endpoint."
+---
+
+SCO Autolavados calculates laundrer compensation using a **commission pool (pozo)** model. Instead of per-order tips or fixed salaries, all revenue from completed service orders is pooled together. A configurable percentage of that pool becomes the shared commission, which is then split equally among all laundrers who clocked in on that day. This model aligns incentives — laundrers benefit collectively from a busy day — and simplifies end-of-day accounting to a single API call.
+
+## How the Commission Pool Works
+
+At the end of each day, the admin retrieves the payroll summary using `GET /api/payroll/daily`. The backend:
+
+1. Identifies all laundrers with `isWorkingToday = true` or a `lastShiftStart` timestamp within the target day.
+2. Fetches all service orders with `state: "FINALIZADO"` and a `timeEnd` within the same day.
+3. Calculates the total pool (`totalPozoUsd`) based on the configured `commissionType`.
+4. Divides `totalPozoUsd` equally among the active laundrers to determine `payoutPerLaundrer`.
+
+The commission percentage is set via `AutoLavado.commissionPercent` (default: **40%**). For example, if the day's completed washes totaled **$50** in service revenue and `commissionPercent` is `40`, the pool is **$20**, split among active laundrers.
+
+## Commission Types
+
+The commission calculation mode is configured in `AutoLavado.commissionType`:
+
+<CardGroup cols={2}>
+  <Card title="FULL_PRICE" icon="dollar-sign">
+    Commission is calculated on the **full price** of each service actually performed. Each finished service order contributes `service.priceUsd × (commissionPercent / 100)` to the pool. Use this mode when prices vary significantly by service type and you want laundrers to benefit from higher-value washes.
+  </Card>
+  <Card title="BASE_SERVICE" icon="car">
+    Commission is calculated on the **base service price** for the vehicle type, regardless of the actual service performed. The system finds the `Services` record with `isBaseService: true` matching the vehicle's `typeCarId` and uses that price for the commission calculation. Use this mode to standardize commission payouts across all wash types.
+  </Card>
+</CardGroup>
+
+<Info>
+  `BASE_SERVICE` mode requires that at least one service in the catalogue has `isBaseService: true` set for each vehicle type. If no base service is found for a vehicle type, that order will contribute `$0` to the pool for commission purposes.
+</Info>
+
+## Shift Tracking
+
+Laundrers must have their shift started for the day to be included in the payroll pool. There are two ways a shift gets activated:
+
+1. **Explicit start** — An Admin calls `PATCH /api/laundrers/:id/shift/start`, setting `isWorkingToday: true` and recording `lastShiftStart`.
+2. **Implicit start** — When an Admin assigns a laundrer to a service order via `PATCH /api/service-orders/:id/start`, the system automatically activates the laundrer's shift if it wasn't already.
+
+**Midnight reset:** A cron job runs at midnight (VET, UTC-4) and sets `isWorkingToday = false` for all laundrers, clearing the shift state for the new workday. Historical payroll lookups use `lastShiftStart` timestamps to determine which laundrers were active on any past date.
+
+```http
+PATCH /api/laundrers/:id/shift/start
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+```http
+PATCH /api/laundrers/:id/shift/end
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+## Viewing Payroll
+
+The payroll endpoint is Admin-only and returns a full summary for any given day:
+
+```http
+GET /api/payroll/daily
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+**With optional date filter:**
+
+```http
+GET /api/payroll/daily?date=2026-06-26
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+Without `?date`, the endpoint defaults to the current day (adjusted to VET, UTC-4).
+
+**Response (200):**
+
+```json
+{
+  "date": "2026-06-26T00:00:00.000Z",
+  "totalOrdersFinished": 12,
+  "totalPozoUsd": 48.0,
+  "laundrersCount": 4,
+  "payoutPerLaundrer": 12.0,
+  "commissionType": "BASE_SERVICE",
+  "activeLaundrers": [
+    { "id": "uuid", "name": "Pedro", "lastName": "Lavador", "cedula": "V87654321" }
+  ]
+}
+```
+
+**Real-world example from the test flow** (1 laundrer, $5 wash, 40% commission):
+
+```http
+GET /api/payroll/daily?date=2026-06-26
+Authorization: Bearer <TOKEN_ADMIN>
+```
+
+```json
+{
+  "date": "2026-06-26T00:00:00.000Z",
+  "totalOrdersFinished": 1,
+  "totalPozoUsd": 2.0,
+  "laundrersCount": 1,
+  "payoutPerLaundrer": 2.0,
+  "commissionType": "FULL_PRICE"
+}
+```
+
+*(40% of $5 = $2 pool. Pedro is the only active laundrer, so he receives the full $2.)*
+
+If no laundrers were active on the requested day, the API returns:
+
+```json
+{
+  "message": "No hay lavadores activos hoy",
+  "totalPozoUsd": 0,
+  "laundrersCount": 0,
+  "payoutPerLaundrer": 0,
+  "activeLaundrers": []
+}
+```
+
+## Registering Payroll Payment
+
+After reviewing the payroll summary, the admin can record the commission payout as an expense:
+
+```http
+POST /api/payroll/register
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "dateString": "2026-06-26"
+}
+```
+
+This creates an `Expense` record describing the total payout (`"Pago de Nómina (N lavadores) - Fecha: ..."`) and deducts it from the `AutoLavado` balance, keeping the books balanced.
+
+## Configuring Commission
+
+Update commission settings via the `AutoLavado` configuration endpoint:
+
+```http
+PUT /api/autolavado
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "commissionPercent": 35,
+  "commissionType": "BASE_SERVICE"
+}
+```
+
+Changes take effect immediately for the next payroll calculation. Historical payroll data is not retroactively recalculated.
+
+<Tip>
+  Run `GET /api/payroll/daily` alongside `GET /api/dashboard/kpis` as part of your daily end-of-day routine. The dashboard gives you the revenue picture while the payroll endpoint tells you exactly what to pay each laundrer before closing the till.
+</Tip>
+
+<Card title="Payroll API Reference" icon="code" href="/api-reference/payroll">
+  Full endpoint reference for daily payroll calculation and commission configuration.
+</Card>

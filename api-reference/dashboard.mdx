@@ -1,0 +1,124 @@
+---
+title: "Dashboard KPIs API Endpoint"
+sidebarTitle: "Dashboard"
+description: "GET /api/dashboard/kpis returns real-time business analytics for the SCO Autolavados admin panel — revenue, balances, top customers, and service metrics."
+---
+
+The Dashboard KPIs endpoint aggregates the most important operational and financial metrics into a single response for the administrative panel. All date calculations are anchored to **Venezuela Time (VET, UTC-4)** via `dayjs` with the `America/Caracas` timezone, so "today" always reflects the local business day.
+
+<Tip>
+  Combine `GET /api/dashboard/kpis` with `GET /api/payroll/daily` for a complete
+  end-of-day administrative summary: the KPI endpoint covers revenue, vehicle
+  counts, and laundrer utilization, while the payroll endpoint shows the
+  commission pool breakdown and per-laundrer payout.
+</Tip>
+
+---
+
+## Endpoints
+
+### GET /api/dashboard/kpis
+
+Return real-time business KPIs for the admin dashboard. All "today" metrics are computed against the current date in VET (UTC-4) at the time of the request. The weekly sales history covers the current day plus the 6 preceding calendar days.
+
+**Authentication:** Requires a valid JWT token with the **ADMIN** role.
+
+```bash
+curl http://localhost:3000/api/dashboard/kpis \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+```
+
+**Response 200 — KPI object:**
+
+```json
+{
+  "balanceUsd": 150.0,
+  "balanceBs": 93331.5,
+  "todayIncomeUsd": 37.5,
+  "vehiclesAttendedToday": 8,
+  "activeLaundrersToday": 3,
+  "totalLaundrers": 5,
+  "weeklySales": [
+    { "date": "20/06", "incomeUsd": 42.0 },
+    { "date": "21/06", "incomeUsd": 28.5 },
+    { "date": "22/06", "incomeUsd": 0.0 },
+    { "date": "23/06", "incomeUsd": 15.0 },
+    { "date": "24/06", "incomeUsd": 60.0 },
+    { "date": "25/06", "incomeUsd": 33.0 },
+    { "date": "26/06", "incomeUsd": 37.5 }
+  ]
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `500` | Internal calculation error |
+| `401` | Missing or invalid JWT token |
+| `403` | Caller does not have the ADMIN role |
+
+---
+
+## KPI Response Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `balanceUsd` | `number` | Current USD cash balance from the AutoLavado record. Increases with approved payments, decreases with registered expenses. |
+| `balanceBs` | `number` | Current Bolívares balance from the AutoLavado record. Updated in the same way as `balanceUsd`. |
+| `todayIncomeUsd` | `number` | Sum of `totalUsd` across all `Sales` records created today (VET). Represents finalized, invoiced revenue for the day. |
+| `vehiclesAttendedToday` | `number` | Count of `ServiceOrders` with `state = "FINALIZADO"` whose `timeEnd` falls within today (VET). Reflects actual washes completed, not just orders created. |
+| `activeLaundrersToday` | `number` | Count of users with the `LAUNDRER` role whose `isWorkingToday` flag is currently `true`. Reflects the live number of laundrers on shift. |
+| `totalLaundrers` | `number` | Total count of users with the `LAUNDRER` role regardless of shift status. Useful for capacity planning context. |
+| `weeklySales` | `array` | 7-element array of daily revenue totals for the last 7 days (oldest → newest). Each element has `date` (formatted `DD/MM`) and `incomeUsd` (total USD invoiced that day). |
+
+---
+
+## weeklySales Array
+
+The `weeklySales` array is built by iterating from 6 days ago through today, querying the `Sales` table for each day's total. Days with no sales return `incomeUsd: 0.0`. This array is suitable for rendering a bar or line chart on the admin panel without any client-side aggregation.
+
+```json
+"weeklySales": [
+  { "date": "20/06", "incomeUsd": 42.0 },
+  { "date": "21/06", "incomeUsd": 28.5 },
+  { "date": "22/06", "incomeUsd": 0.0 },
+  { "date": "23/06", "incomeUsd": 15.0 },
+  { "date": "24/06", "incomeUsd": 60.0 },
+  { "date": "25/06", "incomeUsd": 33.0 },
+  { "date": "26/06", "incomeUsd": 37.5 }
+]
+```
+
+<Note>
+  The exact response shape is determined by the `getDashboardKpis` controller
+  implementation in `src/controllers/Dashboard.ts`. The fields documented above
+  reflect the current implementation. If the controller is extended in the future
+  (e.g. to add top customers, expense summaries, or inventory alerts), new fields
+  will appear in the response. Recommend reading the live endpoint response to
+  discover any additions beyond what is documented here.
+</Note>
+
+---
+
+## Related Endpoints
+
+Use these endpoints alongside the dashboard for a full administrative view:
+
+<CardGroup cols={2}>
+  <Card title="Payroll — Daily Pool" icon="coins" href="/api-reference/payroll">
+    Calculate the laundrer commission pool and per-laundrer payout for any date.
+    Combine with KPIs for end-of-day reporting.
+  </Card>
+  <Card title="AutoLavado — Exchange Rate" icon="arrow-right-arrow-left" href="/api-reference/autolavado">
+    Fetch the current BCV USD/EUR → Bolívares rate used to convert balances and
+    sale totals.
+  </Card>
+  <Card title="Sales — Invoice History" icon="receipt" href="/api-reference/sales">
+    Full invoice history with line-item details. The source for
+    `todayIncomeUsd` and `weeklySales` data.
+  </Card>
+  <Card title="AutoLavado — Wait Time" icon="clock" href="/api-reference/autolavado">
+    Real-time estimated wait time based on active laundrers and queued orders.
+  </Card>
+</CardGroup>

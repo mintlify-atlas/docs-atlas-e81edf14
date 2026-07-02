@@ -1,0 +1,123 @@
+---
+title: "Authenticate with the SCO Autolavados API"
+sidebarTitle: "Authentication"
+description: "SCO Autolavados API uses JWT Bearer tokens. Obtain a token via POST /api/users/login and include it in the Authorization header on protected routes."
+---
+
+The SCO Autolavados API uses **JSON Web Tokens (JWT)** for stateless authentication. The flow is straightforward: call the login endpoint with valid credentials, receive a signed JWT, then include that token in the `Authorization` header of every request to a protected route. No session state is kept on the server — each request is authenticated independently by verifying the token's signature against `JWT_SECRET`.
+
+---
+
+## Obtain a Token
+
+Send a `POST` request to `/api/users/login` with an `identifier` (either the user's registered `email` address or their `user` username field) and their `password`.
+
+```bash
+curl -X POST http://localhost:3000/api/users/login \
+  -H "Content-Type: application/json" \
+  -d '{"identifier": "admin", "password": "admin123"}'
+```
+
+**Successful response — `200 OK`:**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "a1b2c3d4-...",
+    "email": null,
+    "role": "ADMIN"
+  }
+}
+```
+
+The `identifier` field accepts either the user's `email` or `user` (username) field — the login controller resolves both automatically. Store the returned `token` value; you will need it for every authenticated request.
+
+---
+
+## Using the Token
+
+Include the token as a **Bearer** credential in the `Authorization` header:
+
+```bash
+curl http://localhost:3000/api/users \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+The header must follow the exact format `Bearer <token>`. Any other format (missing scheme, extra whitespace, etc.) will be rejected with `401`.
+
+---
+
+## Token Payload
+
+When the `verifyToken` middleware receives a request it:
+
+1. Reads the `Authorization` header and checks that it starts with `Bearer `.
+2. Extracts the token string after the space.
+3. Calls `jwt.verify(token, process.env.JWT_SECRET)` to validate the signature and expiry.
+4. Attaches the decoded payload to `req.user` so downstream controllers can read it.
+
+The decoded payload contains at minimum:
+
+| Claim | Description |
+|---|---|
+| `id` | UUID of the authenticated user |
+| `role` | Role name string (e.g. `"ADMIN"`, `"CUSTOMER"`, `"LAUNDRER"`) |
+| `exp` | Unix timestamp of token expiry (set at signing time) |
+
+If the token is missing, malformed, or expired, `verifyToken` responds immediately with `401` and does **not** call `next()`.
+
+---
+
+## Role Enforcement
+
+Routes that require a specific role are additionally guarded by `verifyRole(allowedRoles)`. After `verifyToken` attaches `req.user`, `verifyRole` checks that `req.user.role` (case-insensitive) is in the `allowedRoles` array passed to the middleware.
+
+```ts
+// Example: ADMIN-only route
+router.get('/users', verifyToken, verifyRole(['ADMIN']), async (req, res) => { ... });
+
+// Example: ADMIN or CUSTOMER route
+router.post('/payments', verifyToken, verifyRole(['ADMIN', 'CUSTOMER']), async (req, res) => { ... });
+```
+
+If the authenticated user's role is not in the allowed list, the middleware returns:
+
+```json
+{
+  "error": "Acceso denegado. Se requiere uno de los siguientes roles: ADMIN"
+}
+```
+
+---
+
+## Error Responses
+
+| Status | Scenario |
+|---|---|
+| `401` | `Authorization` header is missing or does not start with `Bearer ` |
+| `401` | Token signature is invalid or the token has expired |
+| `401` | Wrong credentials supplied to `POST /api/users/login` |
+| `403` | Valid token, but the user's role is not permitted for the requested endpoint |
+
+---
+
+## Token Storage
+
+<Note>
+  The SCO Autolavados frontend stores the JWT in **`localStorage`** after a successful login (per `api_test_flow.md`). This makes the token available across page refreshes and browser tabs. For production deployments that require higher security guarantees, consider migrating to **`httpOnly` cookies** so the token is not accessible from JavaScript, reducing exposure to XSS attacks.
+</Note>
+
+---
+
+## Environment Configuration
+
+<Warning>
+  The `JWT_SECRET` environment variable **must be set** before starting the server and must use the **same value** for both token generation (signing at login) and token validation (`verifyToken` middleware). A mismatch will cause every token verification to fail with `401`. The server will refuse to start entirely if `JWT_SECRET` is absent from the environment.
+</Warning>
+
+Set the variable in your `.env` file at the project root:
+
+```bash
+JWT_SECRET=your_long_random_secret_here
+```

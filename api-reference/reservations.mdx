@@ -1,0 +1,271 @@
+---
+title: "Reservations API Endpoints"
+sidebarTitle: "Reservations"
+description: "REST endpoints for scheduling car wash appointments in SCO Autolavados — create, list, update, and soft-delete reservations with role-based visibility and auto-queue integration."
+---
+
+The Reservations module lets customers schedule car wash appointments in advance. Customers have scoped visibility — they can only read and manage their own reservations, and the system validates that they can only book services for vehicles registered to their account. Admins have unrestricted access to all reservations.
+
+<Info>
+  **Auto-queue cron integration:** Reservations with status `CONFIRMED` are
+  automatically converted into service orders (placed in queue) by a scheduled
+  cron job. The cron runs between **6:30 AM and 12:00 PM VET** (Venezuela Time,
+  UTC-4) and picks up any confirmed reservation whose scheduled `date` falls
+  within the next 60 minutes. Once processed, the reservation status is updated
+  to `COMPLETED`.
+</Info>
+
+---
+
+## Endpoints
+
+### POST /api/reservations
+
+Create a new reservation for a specific vehicle and service. Each time slot (exact `date`) has a **maximum capacity of 2 non-cancelled reservations** — the endpoint will reject a third booking at the same exact datetime.
+
+When an **ADMIN** creates a reservation it is automatically set to `CONFIRMED`. When a **CUSTOMER** creates one it starts as `PENDING` and requires admin confirmation before the cron can process it.
+
+**Authentication:** Requires ADMIN or CUSTOMER role.
+
+#### Request Body
+
+<ParamField body="date" type="string (ISO 8601)" required>
+  Desired appointment datetime in ISO 8601 format, e.g.
+  `"2026-06-27T10:00:00.000Z"`. The exact datetime is used to check slot
+  capacity — two reservations at the same instant are the maximum allowed.
+</ParamField>
+
+<ParamField body="carId" type="string (UUID)" required>
+  UUID of the vehicle to be serviced. If the caller is a CUSTOMER, the vehicle
+  must be registered under their account — otherwise the request is rejected with
+  a 400 error.
+</ParamField>
+
+<ParamField body="serviceId" type="string (UUID)" required>
+  UUID of the service to be performed (e.g. Lavado Completo).
+</ParamField>
+
+<ParamField body="userId" type="string (UUID)">
+  ADMIN-only. Override which customer the reservation is created for. When
+  called by a CUSTOMER, this field is ignored — the token identity is always
+  used.
+</ParamField>
+
+```bash
+# Customer creating a reservation for their own vehicle
+curl -X POST http://localhost:3000/api/reservations \
+  -H "Authorization: Bearer <CUSTOMER_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "carId": "<ID_VEHICULO_ABC_12D>",
+    "serviceId": "<ID_LAVADO_COMPLETO>",
+    "date": "2026-06-27T10:00:00.000Z"
+  }'
+```
+
+**Response 201 — Reservation object:**
+
+```json
+{
+  "id": "r1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "date": "2026-06-27T10:00:00.000Z",
+  "status": "PENDING",
+  "carId": "c1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "serviceId": "sv1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "userId": "u1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "createdAt": "2026-06-26T09:00:00.000Z"
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Missing required fields |
+| `400` | Customer trying to book a vehicle that doesn't belong to them |
+| `400` | Time slot already at capacity (2 non-cancelled reservations) |
+| `401` | Missing or invalid JWT |
+| `403` | Caller does not have ADMIN or CUSTOMER role |
+
+---
+
+### GET /api/reservations
+
+List reservations. Admins receive all reservations in the system; Customers receive only their own. Results are ordered by `date` ascending.
+
+**Authentication:** Requires ADMIN or CUSTOMER role.
+
+#### Query Parameters
+
+<ParamField query="date" type="string (YYYY-MM-DD)">
+  Filter by calendar day. Returns all reservations whose `date` falls within
+  that day (00:00:00 to 23:59:59). If omitted, the full historical list is
+  returned.
+</ParamField>
+
+```bash
+# Admin — get all reservations for June 27 2026
+curl "http://localhost:3000/api/reservations?date=2026-06-27" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+
+# Customer — get all their own upcoming reservations (no date filter)
+curl http://localhost:3000/api/reservations \
+  -H "Authorization: Bearer <CUSTOMER_TOKEN>"
+```
+
+**Response 200 — Array of Reservation objects:**
+
+```json
+[
+  {
+    "id": "r1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "date": "2026-06-27T10:00:00.000Z",
+    "status": "PENDING",
+    "carId": "c1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "car": {
+      "plate": "ABC12D",
+      "mark": "Toyota",
+      "model": "Corolla"
+    },
+    "serviceId": "sv1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "service": {
+      "name": "Lavado Completo",
+      "stimatedTimeMin": 45
+    },
+    "userId": "u1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "user": {
+      "name": "María",
+      "lastName": "González"
+    },
+    "createdAt": "2026-06-26T09:00:00.000Z"
+  }
+]
+```
+
+---
+
+### PUT /api/reservations/:id
+
+Update an existing reservation. Customers may only modify their own reservations, and are restricted to setting `status` to `CANCELLED`. Admins can update any field and set any status.
+
+If the `date` is changed, the new slot is validated against the 2-reservation capacity limit before saving.
+
+**Authentication:** Requires ADMIN or CUSTOMER role.
+
+#### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the reservation to update.
+</ParamField>
+
+#### Request Body (all fields optional)
+
+<ParamField body="date" type="string (ISO 8601)">
+  New appointment datetime. A capacity check is performed on the new slot.
+  ADMIN only for status changes other than `CANCELLED`.
+</ParamField>
+
+<ParamField body="carId" type="string (UUID)">
+  New vehicle UUID. If the caller is a CUSTOMER, the new vehicle must belong to
+  them.
+</ParamField>
+
+<ParamField body="serviceId" type="string (UUID)">
+  New service UUID.
+</ParamField>
+
+<ParamField body="status" type="string">
+  New reservation status. Customers may only set this to `CANCELLED`. Admins
+  can set any valid status: `PENDING`, `CONFIRMED`, `COMPLETED`, or `CANCELLED`.
+</ParamField>
+
+```bash
+# Admin confirming a pending reservation
+curl -X PUT http://localhost:3000/api/reservations/<RESERVATION_ID> \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "CONFIRMED" }'
+
+# Customer cancelling their own reservation
+curl -X PUT http://localhost:3000/api/reservations/<RESERVATION_ID> \
+  -H "Authorization: Bearer <CUSTOMER_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "CANCELLED" }'
+```
+
+**Response 200 — Updated Reservation object.**
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Reservation not found |
+| `400` | Customer trying to update another user's reservation |
+| `400` | Customer trying to set a status other than `CANCELLED` |
+| `400` | Customer trying to reassign to a vehicle they don't own |
+| `400` | New time slot already at capacity |
+
+---
+
+### DELETE /api/reservations/:id
+
+Soft-delete a reservation. This endpoint does **not** physically remove the row from the database — it sets `status` to `CANCELLED` to preserve the historical record. Customers may only cancel their own reservations.
+
+**Authentication:** Requires ADMIN or CUSTOMER role.
+
+#### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the reservation to cancel.
+</ParamField>
+
+```bash
+# Customer cancelling their reservation
+curl -X DELETE http://localhost:3000/api/reservations/<RESERVATION_ID> \
+  -H "Authorization: Bearer <CUSTOMER_TOKEN>"
+```
+
+**Response 200:**
+
+```json
+{
+  "message": "Reserva eliminada exitosamente",
+  "reservation": {
+    "id": "r1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "status": "CANCELLED"
+  }
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Reservation not found |
+| `400` | Customer trying to delete another user's reservation |
+
+---
+
+## Reservation Object Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | UUID of the reservation |
+| `date` | `string` | ISO 8601 datetime of the scheduled appointment |
+| `status` | `string` | Current status — see statuses below |
+| `carId` | `string` | UUID of the vehicle being serviced |
+| `car` | `object` | Vehicle details: `plate`, `mark`, `model` |
+| `serviceId` | `string` | UUID of the requested service |
+| `service` | `object` | Service details: `name`, `stimatedTimeMin` |
+| `userId` | `string` | UUID of the customer who owns the reservation |
+| `user` | `object` | Customer `name` and `lastName` |
+| `createdAt` | `string` | ISO 8601 timestamp when the reservation was created |
+
+## Reservation Statuses
+
+| Status | Description |
+|--------|-------------|
+| `PENDING` | Created by a customer, awaiting admin confirmation |
+| `CONFIRMED` | Confirmed by an admin; eligible for auto-queue processing |
+| `COMPLETED` | Cron job has successfully converted this into a service order |
+| `CANCELLED` | Soft-deleted by the customer or admin — slot is freed |

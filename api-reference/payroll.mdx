@@ -1,0 +1,156 @@
+---
+title: "Payroll and Commission Pool API Endpoints"
+sidebarTitle: "Payroll"
+description: "REST endpoint for SCO Autolavados daily payroll — calculate the laundrer commission pool for any date, split equally among laundrers who worked that day."
+---
+
+SCO Autolavados uses a **commission pool (pozo)** model for laundrer payroll. At the end of each day, the system calculates the total commission earned from all finalized service orders, then divides it equally among every laundrer who started a shift that day (`isWorkingToday` was `true` at some point during the day). The commission basis — either the full service price or the base service price for that vehicle type — is configurable via the `commissionType` field on the AutoLavado record.
+
+<Tip>
+  **End-of-day reporting:** Call `GET /api/payroll/daily` with no query params to
+  get today's running total — useful for a live dashboard tile during business
+  hours. For historical reporting, pass `?date=YYYY-MM-DD` to query any past
+  date. Combine with `GET /api/dashboard/kpis` for a full administrative
+  end-of-day overview.
+</Tip>
+
+---
+
+## Endpoints
+
+### GET /api/payroll/daily
+
+Calculate the commission pool and per-laundrer payout for a given day. The date range is adjusted for Venezuela Time (VET, UTC-4) so that "today" always maps correctly regardless of the server's UTC clock.
+
+**Authentication:** Requires a valid JWT token with the **ADMIN** role.
+
+#### Query Parameters
+
+<ParamField query="date" type="string (YYYY-MM-DD)">
+  The calendar date to calculate payroll for, in Venezuela Time. Defaults to
+  today (VET) if omitted. Example: `2026-06-26`.
+</ParamField>
+
+```bash
+curl "http://localhost:3000/api/payroll/daily?date=2026-06-26" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+```
+
+```bash
+# Default — today's running payroll
+curl http://localhost:3000/api/payroll/daily \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+```
+
+**Response 200 — Payroll summary:**
+
+```json
+{
+  "date": "2026-06-26T04:00:00.000Z",
+  "totalOrdersFinished": 12,
+  "totalPozoUsd": 48.0,
+  "laundrersCount": 4,
+  "payoutPerLaundrer": 12.0,
+  "commissionType": "BASE_SERVICE",
+  "activeLaundrers": [
+    {
+      "id": "u1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Pedro",
+      "lastName": "Lavador",
+      "cedula": "V12345678"
+    }
+  ]
+}
+```
+
+**Response when no laundrers were active:**
+
+```json
+{
+  "message": "No hay lavadores activos hoy",
+  "totalPozoUsd": 0,
+  "laundrersCount": 0,
+  "payoutPerLaundrer": 0,
+  "activeLaundrers": []
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `500` | AutoLavado configuration not found in the database |
+| `500` | Internal calculation error |
+| `401` | Missing or invalid JWT token |
+| `403` | Caller does not have the ADMIN role |
+
+---
+
+## Response Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `date` | `string` | ISO 8601 start-of-day timestamp (04:00 UTC = 00:00 VET) for the requested date |
+| `totalOrdersFinished` | `number` | Count of service orders with state `FINALIZADO` whose `timeEnd` falls on the requested date |
+| `totalPozoUsd` | `number` | Total USD flowing into the commission pool — calculated as `service.priceUsd × commissionPercent / 100` summed across all finished orders |
+| `laundrersCount` | `number` | Number of laundrers who started a shift on this date (`lastShiftStart` within the day range, or `isWorkingToday` was `true`) |
+| `payoutPerLaundrer` | `number` | `totalPozoUsd ÷ laundrersCount` — each laundrer's equal share |
+| `commissionType` | `string` | Either `FULL_PRICE` or `BASE_SERVICE` — mirrors the AutoLavado configuration at query time |
+| `activeLaundrers` | `array` | List of laundrer objects (`id`, `name`, `lastName`, `cedula`) who worked that day |
+
+---
+
+## Commission Type Calculation
+
+The `commissionType` setting on the AutoLavado record controls which price is used as the basis for each finished order's contribution to the pool:
+
+| `commissionType` | Basis per order |
+|------------------|-----------------|
+| `FULL_PRICE` | The actual `service.priceUsd` of the service that was performed |
+| `BASE_SERVICE` | The `priceUsd` of the base service (`isBaseService: true`) configured for the vehicle's `TypeCar` — ignores the actual service performed |
+
+In both cases the contribution is multiplied by `commissionPercent / 100` (configured on AutoLavado, default 40%).
+
+**Example:** 1 finished order, service price $5.00, `commissionPercent` = 40, mode = `FULL_PRICE`:
+- Contribution to pool = $5.00 × 0.40 = **$2.00**
+
+---
+
+## POST /api/payroll/pay
+
+Register a payroll payment as a company expense. This records the full pool amount as an `Expense` entry (debited from the AutoLavado balance) so the disbursement appears in financial reports.
+
+**Authentication:** Requires a valid JWT token with the **ADMIN** role.
+
+#### Request Body
+
+<ParamField body="date" type="string (YYYY-MM-DD)">
+  The payroll date to pay. Defaults to today if omitted.
+</ParamField>
+
+```bash
+curl -X POST http://localhost:3000/api/payroll/pay \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{ "date": "2026-06-26" }'
+```
+
+**Response 200:**
+
+```json
+{
+  "message": "Pago de nómina registrado con éxito",
+  "expense": {
+    "id": "exp-uuid",
+    "description": "Pago de Nómina (4 lavadores) - Fecha: 6/26/2026",
+    "amountUSD": 48.0,
+    "amountBS": 29865.68,
+    "date": "2026-06-26T15:30:00.000Z"
+  }
+}
+```
+
+<Card title="Payroll Concepts" icon="book-open" href="/features/payroll">
+  Read the conceptual guide for a full explanation of the commission pool model,
+  shift management, and how `FULL_PRICE` vs `BASE_SERVICE` affects daily payouts.
+</Card>

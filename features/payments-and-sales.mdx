@@ -1,0 +1,213 @@
+---
+title: "Payments, Sales, and the Multi-Currency POS"
+sidebarTitle: "Payments & Sales"
+description: "SCO Autolavados supports multi-currency point-of-sale transactions in USD and Bolívares. Payments require admin approval before generating an immutable Sales invoice."
+---
+
+SCO Autolavados is built for the Venezuelan financial reality: every transaction can be recorded in US Dollars, Bolívares, or a combination of both. The platform uses a two-step payment-then-sale workflow. A payment record is registered first and goes through an optional admin approval gate before a final, immutable sales invoice is generated. This separation allows admins to verify that funds actually landed in the bank account before the transaction is considered complete.
+
+## Payment Methods
+
+The following payment methods are supported:
+
+| Method | Notes |
+|--------|-------|
+| `Pago Movil` | Venezuelan mobile payment system — balance recorded in Bs |
+| `Efectivo` | Cash — can be USD or Bs depending on currency received |
+| `Binance` | Crypto — `mountBS` **must** be `0` for Binance payments |
+| `Débito` / `Punto de Venta` | Debit card — balance recorded in Bs |
+| `Transferencia` | Bank transfer |
+| `Zelle` | USD transfer — balance recorded in USD |
+
+<Warning>
+  When `method` is `"binance"`, the `mountBS` field must be `0`. Submitting a non-zero `mountBS` with a Binance payment will return a validation error: `"Los pagos por Binance solo permiten USD (el monto en Bs debe ser 0)"`.
+</Warning>
+
+## Step 1 — Register a Payment
+
+Create a payment record linked to the customer. For cash payments (`Efectivo`), a `reference` is not required. For all other methods, a reference number (bank confirmation, transaction ID, etc.) is mandatory.
+
+```http
+POST /api/payments
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "customerId": "<ID_DE_MARIA>",
+  "method": "Pago Movil",
+  "mountUSD": 7.5,
+  "mountBS": 4666.60,
+  "reference": "REF-00123456"
+}
+```
+
+**Response (201):** The created `Payment` object. Payments are created with `approved: true` when registered through the POS (the money is considered immediately received at the counter).
+
+## Step 2 — Approve the Payment (Legacy Flow)
+
+For payment workflows where the admin needs to verify the transfer before approval (e.g., bank transfers checked against a statement), use the approval endpoint:
+
+```http
+PATCH /api/payments/:id/approve
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+No request body is needed. The system:
+1. Confirms the payment is not already approved — returns `400 "El pago ya se encuentra aprobado"` if it is.
+2. Sets `approved: true` on the payment record.
+3. Adds `mountUSD` and `mountBS` to the corresponding `AutoLavado.balanceUsd` and `AutoLavado.balanceBs` fields.
+
+## Step 3 — Record the Sale
+
+After payment, `POST /api/sales` creates the immutable sales invoice. This links the payment to the service orders and/or product items that were sold, records the exchange rate at the time of sale, and decrements inventory for any product line items.
+
+```http
+POST /api/sales
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "paymentId": "<ID_DEL_PAGO>",
+  "tazaUsd": 622.21,
+  "totalUsd": 7.5,
+  "userId": "<ID_DEL_ADMIN>",
+  "details": [
+    {
+      "cant": 1,
+      "UPriceUsd": 5.0,
+      "serviceOrderId": "<ID_ORDEN_SERVICIO>"
+    },
+    {
+      "cant": 1,
+      "UPriceUsd": 2.5,
+      "itemId": "<ID_AMBIENTADOR_PINO>"
+    }
+  ]
+}
+```
+
+Each entry in `details` must include either `serviceOrderId` (for wash services) or `itemId` (for products sold at the counter). Including `itemId` triggers automatic inventory decrement for the sold quantity.
+
+<Note>
+  The `tazaUsd` field captures the **exchange rate at the time of sale** (Bs per USD). This snapshot is stored on the `Sales` record and is never updated retroactively, ensuring historical accuracy even as the exchange rate fluctuates.
+</Note>
+
+## Complete Business Flow
+
+The following is the full happy-path flow from vehicle arrival to invoice generation:
+
+<Steps>
+  <Step title="Service Order Created">
+    Receptionist creates the service order when the vehicle arrives at the counter.
+    
+    ```http
+    POST /api/service-orders
+    Authorization: Bearer <TOKEN_ADMIN>
+    ```
+  </Step>
+  <Step title="Service Performed and Finalized">
+    Admin assigns laundrer and eventually marks the order as `FINALIZADO`.
+
+    ```http
+    PATCH /api/service-orders/<ID>/start   # assign laundrer
+    PATCH /api/service-orders/<ID>/finish  # mark complete
+    ```
+  </Step>
+  <Step title="Customer Pays at Counter">
+    Cashier registers the payment at the POS.
+
+    ```http
+    POST /api/payments
+    # { "customerId": "...", "method": "Pago Movil", "mountUSD": 7.5, "mountBS": 4666.60 }
+    ```
+  </Step>
+  <Step title="Sale Invoice Generated">
+    Admin posts the final sale linking the payment to the service order (and any items purchased).
+
+    ```http
+    POST /api/sales
+    # { "paymentId": "...", "tazaUsd": 622.21, "totalUsd": 7.5, "userId": "...", "details": [...] }
+    ```
+
+    The `Sales` record is immutable once created. The payment status is confirmed and inventory is decremented in a single atomic transaction.
+  </Step>
+</Steps>
+
+## Customer Orders (Web Portal)
+
+Customers can initiate their own purchase orders directly from the web app without going through the reception counter. This flow supports both service bookings and product purchases.
+
+**Create an order (CUSTOMER role required):**
+
+```http
+POST /api/customer/orders
+Authorization: Bearer <TOKEN_MARIA>
+Content-Type: application/json
+```
+
+```json
+{
+  "details": [
+    {
+      "itemId": "<ID_AMBIENTADOR_PINO>",
+      "cant": 1,
+      "UPriceUsd": 2.5
+    }
+  ]
+}
+```
+
+The order is created with `status: "PENDING"` and inventory is decremented immediately. If insufficient stock exists, the entire request is rejected with a `500` error.
+
+**Pay for the order:**
+
+```http
+POST /api/customer/orders/:id/pay
+Authorization: Bearer <TOKEN_MARIA>
+Content-Type: application/json
+```
+
+```json
+{
+  "method": "Pago Movil",
+  "mountUSD": 0,
+  "mountBS": 1555.25
+}
+```
+
+The order advances to `PAID` status and a payment record is linked to the order.
+
+## Expenses
+
+Expenses record financial outflows from the business. They deduct the amount from `AutoLavado` balance and optionally restock inventory:
+
+```http
+POST /api/expenses
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "description": "Compra de repuestos internos",
+  "amountUSD": 50.5,
+  "amountBS": 0,
+  "quantity": 10,
+  "itemId": "<ID_ITEM_OPCIONAL>"
+}
+```
+
+If both `itemId` and `quantity` are provided, the expense doubles as a restocking operation — the quantity is added to that item's inventory automatically.
+
+<CardGroup cols={2}>
+  <Card title="Payments API Reference" icon="code" href="/api-reference/payments">
+    Endpoint reference for payment registration and approval.
+  </Card>
+  <Card title="Sales API Reference" icon="code" href="/api-reference/sales">
+    Endpoint reference for sales invoice creation and history retrieval.
+  </Card>
+</CardGroup>

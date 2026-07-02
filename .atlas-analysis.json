@@ -1,0 +1,135 @@
+{
+  "projectType": "saas",
+  "projectName": "SCO Autolavados",
+  "projectDescription": "A full-stack web management system for car wash businesses (autolavados) in Venezuela, featuring multi-currency operations (USD/BsS), role-based access control, real-time service queue management, inventory control, payroll, reservations, and a client-facing portal.",
+  "theme": "luma",
+  "primaryColor": "#3b82f6",
+  "lightColor": "#f8fafc",
+  "darkColor": "#0f172a",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/users-and-roles",
+              "features/service-orders",
+              "features/reservations",
+              "features/inventory",
+              "features/payments-and-sales",
+              "features/payroll",
+              "features/dashboard"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment",
+              "configuration/deployment",
+              "configuration/multicurrency"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api-reference/users",
+              "api-reference/vehicles",
+              "api-reference/services",
+              "api-reference/service-orders",
+              "api-reference/inventory",
+              "api-reference/payments",
+              "api-reference/sales",
+              "api-reference/reservations",
+              "api-reference/payroll",
+              "api-reference/autolavado",
+              "api-reference/dashboard"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Role-based access control with Admin, Customer, and Laundrer roles",
+    "Real-time service queue with waiting time algorithm based on active laundrers",
+    "Multi-currency financial engine (USD and Venezuelan Bolívares) with automatic BCV exchange rate fetching",
+    "Automated daily payroll calculation via commission pool system",
+    "Customer self-service portal: reservations, order tracking, and purchase history",
+    "Automated reservation-to-queue pipeline via cron jobs",
+    "Inventory management with automatic stock deduction on sales",
+    "Admin KPI dashboard with top customers, revenue metrics, and balance tracking",
+    "Docker-based deployment with PostgreSQL 15 and Prisma ORM",
+    "Weather-based DSS (Decision Support System) for service recommendations"
+  ],
+  "publicApiSurface": [
+    "POST /api/users/login",
+    "POST /api/users/register",
+    "POST /api/users/admin",
+    "GET /api/users",
+    "GET /api/users/role/:roleName",
+    "GET /api/users/check/:cedula",
+    "PATCH /api/users/:id",
+    "GET /api/cars",
+    "GET /api/cars/:plate",
+    "POST /api/cars",
+    "PUT /api/cars/:id",
+    "GET /api/typecars",
+    "POST /api/typecars",
+    "PUT /api/typecars/:id",
+    "DELETE /api/typecars/:id",
+    "GET /api/services",
+    "POST /api/services",
+    "PUT /api/services/:id",
+    "GET /api/items",
+    "POST /api/items",
+    "PUT /api/inventory/:itemId",
+    "GET /api/service-orders",
+    "POST /api/service-orders",
+    "PATCH /api/service-orders/:id/state",
+    "PATCH /api/service-orders/:id/start",
+    "PATCH /api/service-orders/:id/finish",
+    "GET /api/sales",
+    "POST /api/sales",
+    "POST /api/payments",
+    "PATCH /api/payments/:id/approve",
+    "POST /api/expenses",
+    "GET /api/expenses",
+    "POST /api/customer/orders",
+    "POST /api/customer/orders/:id/pay",
+    "POST /api/reservations",
+    "GET /api/reservations",
+    "PUT /api/reservations/:id",
+    "DELETE /api/reservations/:id",
+    "PATCH /api/laundrers/:id/shift/start",
+    "PATCH /api/laundrers/:id/shift/end",
+    "GET /api/payroll/daily",
+    "GET /api/autolavado",
+    "PUT /api/autolavado",
+    "GET /api/autolavado/exchange-rate",
+    "GET /api/autolavado/waiting-time",
+    "GET /api/dashboard/kpis",
+    "GET /api/roles"
+  ]
+}

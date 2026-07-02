@@ -1,0 +1,191 @@
+---
+title: "Multi-Currency Configuration and Exchange Rates"
+sidebarTitle: "Multi-Currency"
+description: "SCO Autolavados handles USD and Venezuelan Bolívares (BsS) simultaneously. Exchange rates are fetched automatically from the BCV API daily and stored on the AutoLavado entity."
+---
+
+Venezuela's dual-currency economy requires every financial transaction to be recorded in both US Dollars (USD) and Venezuelan Bolívares Soberanos (BsS) simultaneously. SCO Autolavados treats multi-currency support as a first-class concern: exchange rates are fetched automatically from an official source, stored on the central `AutoLavado` entity, stamped immutably on each sale at the moment of transaction, and used to maintain separate running balances for each currency. This ensures that historical invoices and reports always reflect the rate that was actually in effect — not a retroactively recalculated value.
+
+---
+
+## How Rates Are Stored
+
+Exchange rates live on the `AutoLavado` database model — the single global record that represents the car wash business. This model is the authoritative source of truth for the current rate.
+
+| Field | Type | Description |
+|---|---|---|
+| `currentTasaBs` | `Float` | Current USD → BsS exchange rate (e.g., `36.21`) |
+| `currentTasaEurBs` | `Float` | Current EUR → BsS exchange rate |
+| `lastTasaUpdate` | `DateTime` | Timestamp of the last successful rate fetch |
+| `balanceUsd` | `Float` | Cumulative USD balance (incremented by approved payments, decremented by expenses) |
+| `balanceBs` | `Float` | Cumulative BsS balance (same logic) |
+
+Both rate fields default to `0` in the Prisma schema and are populated on first server startup before any requests are handled.
+
+---
+
+## Automatic Rate Fetching
+
+Rate updates are handled by `ExchangeRateService.ts` (`backend/src/services/ExchangeRateService.ts`), which fetches both the USD and EUR official rates in parallel from the **dolarapi.com** BCV (Banco Central de Venezuela) data source:
+
+- **USD endpoint:** `https://ve.dolarapi.com/v1/dolares/oficial`
+- **EUR endpoint:** `https://ve.dolarapi.com/v1/euros/oficial`
+
+The service reads the `promedio`, `venta`, or `price` field from each response (whichever is present), then writes both rates and a new `lastTasaUpdate` timestamp to the `AutoLavado` record via Prisma.
+
+### Daily Cron Job
+
+A cron job defined in `src/index.ts` triggers `updateExchangeRate()` every day at **6:00 AM VET (Venezuela Time, `America/Caracas`)**:
+
+```typescript
+cron.schedule('0 6 * * *', () => {
+  console.log('[Cron] Ejecutando actualización diaria de la tasa de cambio...');
+  updateExchangeRate();
+});
+```
+
+The `dayjs` library with the `utc` and `timezone` plugins is used throughout the backend to correctly handle the `America/Caracas` timezone (UTC−4, no DST).
+
+### Current Rate Endpoint
+
+The current rate is exposed via a dedicated REST endpoint:
+
+```http
+GET /api/autolavado/exchange-rate
+```
+
+**Example response:**
+
+```json
+{
+  "tasaBs": 36.21,
+  "lastUpdate": "2024-05-15T12:00:00Z"
+}
+```
+
+<Note>
+  On every server startup, `initializeApp()` in `src/index.ts` calls `updateExchangeRate()` immediately — before the HTTP server begins accepting requests. This guarantees that a fresh rate is always available even after a container restart, regardless of the time of day.
+</Note>
+
+<Tip>
+  Always call `GET /api/autolavado/exchange-rate` immediately before creating a sale. Pass the returned `tasaBs` as the `tazaUsd` field in your `POST /api/sales` request body. This ensures the sale is recorded at the most current rate rather than a cached client-side value that may be stale.
+</Tip>
+
+---
+
+## Using Rates in Sales
+
+When a sale is created via `POST /api/sales`, the caller must supply the `tazaUsd` field containing the exchange rate at the moment of transaction:
+
+```http
+POST /api/sales
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "tazaUsd": 36.21,
+  "totalUsd": 12.00,
+  "userId": "uuid-of-the-customer",
+  "salesDetails": [
+    {
+      "cant": 1,
+      "UPriceUsd": 12.00,
+      "serviceOrderId": "uuid-of-service-order"
+    }
+  ]
+}
+```
+
+The `tazaUsd` value is stored **immutably** on the `Sales` record. This means:
+
+- Historical invoices always show the exact rate at which the transaction occurred.
+- Reporting and reconciliation are accurate even as the official rate fluctuates day to day.
+- No retroactive recalculation is needed when the rate changes after the sale is recorded.
+
+The `Sales` Prisma model reflects this design:
+
+```prisma
+model Sales {
+  id           String         @id @default(uuid())
+  date         DateTime       @default(now())
+  tazaUsd      Float          // Rate at time of sale — immutable
+  totalUsd     Float
+  paymentId    String?
+  userId       String
+  salesDetails SalesDetails[]
+  ...
+}
+```
+
+---
+
+## Payment Recording
+
+Payments are submitted via `POST /api/payments` and support both currency amounts on the same record:
+
+```http
+POST /api/payments
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "customerId": "uuid-of-customer",
+  "method": "BINANCE",
+  "mountUSD": 12.00,
+  "mountBS": 0,
+  "reference": "binance-tx-ref-123"
+}
+```
+
+### Currency Rules by Payment Method
+
+| Payment Method | `mountUSD` | `mountBS` | Notes |
+|---|---|---|---|
+| Cash USD | `> 0` | `0` or `> 0` | Mixed payments allowed |
+| Cash BsS | `0` | `> 0` | |
+| Binance / USDT | `> 0` | **must be `0`** | Dollar-only; no BsS component |
+| Bank transfer | `0` | `> 0` | Typically BsS |
+
+<Info>
+  For Binance payments, `mountBS` must be `0`. The backend enforces this constraint to prevent double-counting when reconciling USD and BsS balances.
+</Info>
+
+---
+
+## Balance Tracking
+
+When a `Payment` record is approved (`approved: true`), both amounts are added to the corresponding balance fields on the `AutoLavado` entity:
+
+- **`balanceUsd`** — incremented by `mountUSD` of each approved payment; decremented when USD expenses are recorded.
+- **`balanceBs`** — incremented by `mountBS` of each approved payment; decremented when BsS expenses are recorded.
+
+These running totals are surfaced on the admin dashboard as the current cash-in-hand figures for each currency, giving the business owner a real-time view of the dual-currency float without manual reconciliation.
+
+The `Expense` model mirrors this dual-currency pattern:
+
+```prisma
+model Expense {
+  id          String   @id @default(uuid())
+  description String
+  amountUSD   Float    // Deducted from balanceUsd
+  amountBS    Float    // Deducted from balanceBs
+  quantity    Int?
+  itemId      String?
+  date        DateTime @default(now())
+}
+```
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Payments & Sales API" icon="credit-card" href="/api-reference/payments">
+    Full API reference for the payments and sales endpoints.
+  </Card>
+  <Card title="AutoLavado API" icon="building" href="/api-reference/autolavado">
+    Endpoints for reading and updating the AutoLavado entity, including exchange rate data.
+  </Card>
+</CardGroup>

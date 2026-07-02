@@ -1,0 +1,127 @@
+---
+title: "Inventory Management and Stock Control"
+sidebarTitle: "Inventory"
+description: "Track product stock in SCO Autolavados. Items are auto-decremented when sold or used in a service order. Expenses can restock inventory while recording the outflow."
+---
+
+The inventory module in SCO Autolavados tracks stock levels for all physical products — cleaning chemicals, lubricants, accessories such as air fresheners, and any other item sold or consumed during services. Inventory is deeply integrated with both the sales/POS system and the service order pipeline, meaning stock is automatically decremented through normal business operations without requiring separate manual adjustments.
+
+## Items and Inventory
+
+Every product in the system is represented by an `Item` record with a 1:1 linked `Inventory` record. Creating an item via `POST /api/items` automatically creates the corresponding inventory entry in a single database transaction — there is no separate step to "add" the product to inventory.
+
+```http
+POST /api/items
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Ambientador Pino",
+  "priceUsd": 2.5,
+  "photo": null,
+  "initialQuantity": 10
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | ✅ | Unique product name |
+| `priceUsd` | float | ✅ | Unit price in USD |
+| `photo` | string | ❌ | URL or path to product image |
+| `initialQuantity` | integer | ❌ | Starting stock level (defaults to `0` if omitted) |
+
+## Service Resources
+
+Services can declare the consumable inventory items they require via the `ServiceResource` join table. This links a `Services` record to one or more `Item` records with a specified `quantity` per use.
+
+When a service order transitions to `FINALIZADO`, the system automatically iterates over the service's `resources` and decrements each linked item's inventory quantity. This eliminates the need for manual stock adjustments after every wash.
+
+**Example:** A "Lavado Completo" service might declare:
+- 1× Ambientador Pino
+- 50ml × Shampoo Carrocería
+
+When a service order for "Lavado Completo" is finished, those quantities are decremented from inventory automatically.
+
+## Stock Operations
+
+The following operations affect inventory stock levels:
+
+| Operation | Effect on Stock | Endpoint |
+|-----------|----------------|----------|
+| Sale of a product item | Decremented by `cant` sold | `POST /api/sales` with `itemId` in `details` |
+| Customer order containing a product | Decremented at order creation | `POST /api/customer/orders` |
+| Service order finalized with resources | Decremented per `ServiceResource` quantities | `PATCH /api/service-orders/:id/finish` |
+| Manual stock adjustment | Set to exact value specified | `PUT /api/inventory/:itemId` |
+| Expense with `itemId` + `quantity` | **Incremented** (restocking) | `POST /api/expenses` |
+
+### Manual Stock Adjustment
+
+To set a product's stock to a specific quantity (e.g., after a physical count):
+
+```http
+PUT /api/inventory/:itemId
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "quantity": 15
+}
+```
+
+This uses an `upsert` operation — it will create the inventory record if it somehow doesn't exist yet, or update it if it does.
+
+### Restocking via Expenses
+
+When recording a supply purchase as an expense, including the optional `itemId` and `quantity` fields will automatically **add** the purchased quantity to that item's inventory. This way, a single call to `POST /api/expenses` both records the financial outflow and updates the stock:
+
+```http
+POST /api/expenses
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "description": "Compra de 10 ambientadores",
+  "amountUSD": 25.0,
+  "amountBS": 0,
+  "quantity": 10,
+  "itemId": "<ID_AMBIENTADOR_PINO>"
+}
+```
+
+## Viewing Products
+
+`GET /api/items` returns all products ordered alphabetically by name, with each item's current stock nested in an `inventory` object:
+
+```http
+GET /api/items
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+**Sample response item:**
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "Ambientador Pino",
+  "priceUsd": 2.5,
+  "photo": null,
+  "inventory": {
+    "id": "f1e2d3c4-b5a6-7890-abcd-ef0987654321",
+    "quantity": 8
+  }
+}
+```
+
+<Warning>
+  When a sale or service order attempts to decrement inventory below zero, the operation will throw an `"Inventario insuficiente"` error and the entire transaction will be rolled back. Ensure adequate stock is maintained to avoid blocking sales.
+</Warning>
+
+<Card title="Inventory API Reference" icon="code" href="/api-reference/inventory">
+  Full endpoint reference for item creation, inventory updates, and stock management including request/response schemas.
+</Card>

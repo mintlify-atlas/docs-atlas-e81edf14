@@ -1,0 +1,248 @@
+---
+title: "SCO Autolavados System Architecture"
+sidebarTitle: "Architecture"
+description: "Explore the client-server architecture, Docker service topology, PostgreSQL schema design, and the automated cron job pipeline powering SCO Autolavados."
+---
+
+SCO Autolavados follows a classic **client-server architecture** where the React frontend communicates exclusively with an Express REST API, which in turn persists all data in a PostgreSQL database through the Prisma ORM. The entire system is fully containerized: every service — database, API, and frontend — runs inside its own Docker container and is orchestrated by a single `docker-compose.yml` file. This design makes the full stack reproducible on any machine with Docker installed, with zero manual environment configuration beyond a `.env` file.
+
+## Service Topology
+
+Three Docker Compose services make up the SCO Autolavados runtime:
+
+<CardGroup cols={3}>
+  <Card title="sco_db" icon="database">
+    **PostgreSQL 15** database. Stores all persistent application data. Uses a named volume (`postgres_data`) to survive container restarts. Not exposed externally — only reachable by `sco_api` within the Docker network.
+  </Card>
+  <Card title="sco_api" icon="server">
+    **Express.js backend**. Built from `./backend`. Exposes port `3000` for the REST API and port `5555` (mapped to internal port `51212`) for Prisma Studio. Depends on `sco_db`.
+  </Card>
+  <Card title="sco_web" icon="browser">
+    **React/Vite frontend**. Built from `./frontend`. Exposes port `5173`. Depends on `sco_api` and proxies API calls to the backend service.
+  </Card>
+</CardGroup>
+
+The following excerpt from `docker-compose.yml` shows the exact service definitions:
+
+```yaml
+services:
+  db:
+    image: postgres:15
+    container_name: sco_db
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: sco_api
+    ports:
+      - "3000:3000"
+      - "5555:51212"
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+
+  frontend:
+    build: ./frontend
+    container_name: sco_web
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+```
+
+<Note>
+  The `sco_db` container has **no exposed host ports** by design. Only `sco_api` can reach the database, over the internal Docker Compose network. To inspect the database directly, use Prisma Studio at `http://localhost:5555`.
+</Note>
+
+## Backend Stack
+
+The backend is a **Node.js + TypeScript** application served by Express. The following packages are the core of its runtime:
+
+| Package | Version | Role |
+|---|---|---|
+| `express` | ^4.21.2 | HTTP server and routing framework |
+| `@prisma/client` | ^7.8.0 | Type-safe database client (code-generated) |
+| `@prisma/adapter-pg` | ^7.8.0 | Native `pg` driver adapter for Prisma |
+| `jsonwebtoken` | ^9.0.3 | JWT creation and verification for auth |
+| `bcryptjs` | ^3.0.3 | Secure password hashing |
+| `cors` | ^2.8.5 | Cross-Origin Resource Sharing middleware |
+| `morgan` | ^1.10.0 | HTTP request logging |
+| `multer` | ^2.1.1 | Multipart form-data handling for file uploads |
+| `node-cron` | ^4.5.0 | Cron-based scheduled task runner |
+| `dayjs` | ^1.11.21 | Immutable date manipulation with timezone support |
+| `dotenv` | ^17.4.2 | Environment variable loading from `.env` |
+
+The `Prisma Studio` script runs on port `51212` inside the container (`npx prisma studio --browser none --port 51212`), which is mapped to host port `5555` in Docker Compose.
+
+## Frontend Stack
+
+The frontend is a **React 19** single-page application built with Vite. It targets mobile-first responsive layouts and uses Ant Design as its primary component system.
+
+| Package | Version | Role |
+|---|---|---|
+| `react` + `react-dom` | ^19.2.7 | UI rendering |
+| `vite` | ^8.1.0 | Dev server and production bundler |
+| `react-router-dom` | ^7.18.0 | Client-side routing |
+| `antd` | ^6.4.5 | Enterprise-grade UI component library |
+| `@ant-design/icons` | ^6.2.5 | Ant Design icon set |
+| `recharts` | ^3.9.0 | Composable chart library for KPI dashboards |
+| `tailwindcss` | ^4.3.1 | Utility-first CSS framework |
+| `axios` | ^1.18.1 | Promise-based HTTP client for API calls |
+
+## Database Schema
+
+The PostgreSQL schema is defined entirely through Prisma. Below is a summary of every model, its purpose, and its key relationships.
+
+### `AutoLavado`
+
+A **singleton** configuration record representing the car wash business itself. Stores the business name, address, contact info, and all global financial parameters.
+
+```
+AutoLavado {
+  id, name, address, phone, email, photo, rif
+  balanceUsd        Float   — current USD cash balance
+  balanceBs         Float   — current BsS cash balance
+  currentTasaBs     Float   — active USD/BsS exchange rate
+  currentTasaEurBs  Float   — active EUR/BsS exchange rate
+  lastTasaUpdate    DateTime
+  commissionType    String  — "FULL_PRICE" or "BASE_SERVICE"
+  commissionPercent Float   — laundrer commission rate (e.g. 40)
+  payrollPeriod     String  — "DAILY" or "WEEKLY"
+}
+```
+
+### `User` + `Roles`
+
+All actors in the system are `User` records. Role assignment is handled by a FK to the `Roles` table (`ADMIN`, `CUSTOMER`, `LAUNDRER`).
+
+Key fields:
+- `cedula` — unique national ID; used as the account lookup key for the customer auto-populate flow
+- `user` — optional unique username for login (`identifier` field in the login endpoint)
+- `email` / `hashPassword` — nullable; laundrers have neither
+- `isWorkingToday` — boolean flag for laundrers; drives shift availability and wait-time calculations
+- `lastShiftStart` — timestamp of the last shift start recorded via `PATCH /api/laundrers/:id/shift/start`
+
+A `User` can have multiple `Cars`, multiple `Sales`, multiple `ServiceOrders` (both as the creator and as the assigned laundrer), and multiple `Reservations`.
+
+### `Cars` + `TypeCars`
+
+`Cars` represents a customer-owned vehicle. Each car has a unique `plate`, `mark`, `model`, `color`, optional `year`, and belongs to one `User` (owner) and one `TypeCars` category (e.g., sedan, SUV, truck). Car type also links to `Services`, allowing services to be offered only for specific vehicle categories.
+
+### `Services` + `ServiceResource`
+
+`Services` is the catalog of wash and treatment offerings. Each service has a USD price, an estimated duration in minutes (`stimatedTimeMin`), an optional car-type restriction, and an `isBaseService` flag used by the commission calculation engine.
+
+`ServiceResource` is a join table that declares which `Item` (inventory product) a service consumes and in what quantity. When a service order is fulfilled, these resources are decremented from `Inventory`.
+
+### `ServiceOrders`
+
+The core operational entity. Each record represents a single vehicle moving through the wash pipeline. The `state` field follows this lifecycle:
+
+```
+EN_ESPERA  →  LAVANDO  →  FINALIZADO
+```
+
+Fields of note:
+- `laundrerId` — nullable FK; populated when the admin assigns a laundrer via `PATCH /api/service-orders/:id/start`
+- `timeStart` / `stimatedTimeEnd` / `timeEnd` — time-tracking for wait calculations
+- `salesDetails` — 1:1 optional link to `SalesDetails` once the order is invoiced
+- `orderCustomerDetail` — 1:1 optional link when the order was created from a customer purchase order
+
+### `Sales` + `SalesDetails`
+
+`Sales` is the **immutable invoice record** created after an admin approves a payment. It stores the exchange rate (`tazaUsd`) active at the time of sale to ensure historical accuracy. `SalesDetails` holds individual line items, each pointing to either a `ServiceOrders` entry (for wash services) or an `Item` (for physical products).
+
+### `Payment`
+
+Records a single payment transaction before it is tied to a sale. Supports multiple methods:
+
+- `Pago Movil`
+- `efectivo` (cash)
+- `binance`
+- `débito`
+
+The `approved` boolean is set to `true` by an admin once the incoming transfer is verified. Only approved payments can be consolidated into a `Sales` record.
+
+### `OrderCustomers` + `OrderCustomersDetails`
+
+The customer-facing purchase order system. A `Customer` user creates an `OrderCustomers` record from the Customer Portal with one or more detail lines — each pointing to either a product `Item` or a `Services` entry. Status transitions:
+
+```
+PENDING  →  PAID  |  CANCELLED
+```
+
+When a customer order includes a service, a corresponding `ServiceOrders` record is created and linked via `OrderCustomersDetails.serviceOrderId`.
+
+### `Inventory`
+
+A simple 1:1 extension of `Item` tracking the current stock `quantity`. Every product sold (via `SalesDetails`) or consumed by a service (via `ServiceResource`) triggers a decrement.
+
+### `Item`
+
+The master catalog record for any physical product. An `Item` has a name, USD price, optional photo, and optional `Inventory` record. Items appear in sales line items, customer order details, expense records, and service resource definitions.
+
+### `Expense`
+
+Records a cash outflow from the business (e.g., restocking a supply). Decrements `AutoLavado.balanceUsd` / `balanceBs`. Optionally linked to an `Item` if the expense is a stock purchase.
+
+### `Reservation`
+
+A scheduled appointment created by a `Customer` for a specific `Car` + `Service` combination at a future `date`. Status lifecycle:
+
+```
+PENDING  →  CONFIRMED  →  COMPLETED
+                       →  CANCELLED
+```
+
+Confirmed reservations within one hour of their scheduled time are automatically promoted to `ServiceOrders` entries by the reservation cron job (see below).
+
+## Automated Cron Jobs
+
+Three scheduled jobs run inside `sco_api`, defined in `src/index.ts` using `node-cron`. All time evaluations use the `America/Caracas` timezone (Venezuelan Standard Time, UTC−4).
+
+<Note>
+  All cron job schedules and time-window checks use the `America/Caracas` timezone (VET, UTC−4) via `dayjs.tz()`. Deploying the container in a different system timezone will not affect job accuracy.
+</Note>
+
+### 1. Daily Exchange Rate Update — 6:00 AM
+
+```
+cron.schedule('0 6 * * *', ...)
+```
+
+Calls `ExchangeRateService.updateExchangeRate()`, which fetches the current official USD/BsS rate from the **BCV (Banco Central de Venezuela)** and writes it to `AutoLavado.currentTasaBs` and `AutoLavado.lastTasaUpdate`. The same fetch runs once at server startup via `initializeApp()` to ensure a fresh rate is always available.
+
+### 2. Laundrer Shift Reset — Midnight
+
+```
+cron.schedule('0 0 * * *', ...)
+```
+
+Resets `isWorkingToday = false` on every `User` with the `LAUNDRER` role. This closes the active work shift for all laundrers at the end of each day, ensuring that commission calculations and availability counts always reflect the current day's activity only.
+
+### 3. Auto-Queue Confirmed Reservations — Every 30 Minutes (6:30 AM–12:00 PM VET)
+
+```
+cron.schedule('*/30 * * * *', ...)
+```
+
+Runs every 30 minutes but only executes its logic when the current VET time falls between **6:30 AM and 12:00 PM** (business hours). On each execution it:
+
+1. Queries all `Reservation` records with `status = CONFIRMED` whose `date` is within the next 60 minutes.
+2. For each match, opens a Prisma transaction that:
+   - Creates a new `ServiceOrders` entry with `state = PENDIENTE`, pre-populated with the reservation's car, service, user, and estimated end time.
+   - Updates the `Reservation.status` to `COMPLETED` to prevent the same reservation from being queued again.
+3. Logs a confirmation message for each processed reservation.
+
+<Tip>
+  The reservation auto-queue job acts as the bridge between the **Customer Portal** (where clients book appointments) and the **Admin Service Queue** (where laundrers pick up work). No manual intervention is required to convert a confirmed appointment into a queue entry.
+</Tip>

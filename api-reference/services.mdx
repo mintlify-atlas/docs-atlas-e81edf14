@@ -1,0 +1,345 @@
+---
+title: "Services Catalog API Endpoints"
+sidebarTitle: "Services"
+description: "REST endpoints for managing the SCO Autolavados service catalog — create, list, and update wash services with pricing, estimated time, and vehicle type targeting."
+---
+
+## Overview
+
+The Services API manages the wash service catalog offered by SCO Autolavados. Each service defines a name, description, price, estimated duration, and an optional link to a specific **vehicle type** (so that, for example, a "Motor Truck Wash" only appears for `Camioneta`-type vehicles).
+
+Services are referenced throughout the system:
+
+- **Service Orders** — an operator assigns a service to a vehicle visit.
+- **Customer Orders** — customers select services when booking online.
+- **Reservations** — customers pick a service when scheduling an appointment.
+- **Payroll / Nómina** — service prices feed into the daily earnings pool.
+
+---
+
+## Service Object
+
+```json
+{
+  "id": "uuid",
+  "name": "Lavado Completo",
+  "description": "Lavado de carrocería, aspirado y ambientador",
+  "priceUsd": 5.0,
+  "stimatedTimeMin": 45,
+  "isBaseService": true,
+  "typeCarId": null,
+  "typeCar": null,
+  "resources": []
+}
+```
+
+<ResponseField name="id" type="string">
+  UUID primary key of the service.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Service name. Must be unique across the catalog.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description shown to customers and operators.
+</ResponseField>
+
+<ResponseField name="priceUsd" type="number">
+  Price in USD (floating-point). This value feeds into the daily payroll pool calculation.
+</ResponseField>
+
+<ResponseField name="stimatedTimeMin" type="number">
+  Estimated completion time in **minutes**. Used by the dynamic waiting-time algorithm (`GET /api/autolavado/waiting-time`).
+</ResponseField>
+
+<ResponseField name="isBaseService" type="boolean">
+  When `true`, this service is considered a **base service** for its vehicle type. Only one base service is allowed per vehicle type. This flag drives the `BASE_SERVICE` payroll commission mode (see note below).
+</ResponseField>
+
+<ResponseField name="typeCarId" type="string | null">
+  UUID of the linked vehicle type, or `null` if the service applies to all vehicle types.
+</ResponseField>
+
+<ResponseField name="typeCar" type="object | null">
+  Embedded TypeCar object `{ id, name }`, or `null`.
+</ResponseField>
+
+<ResponseField name="resources" type="array">
+  Array of `ServiceResource` items — inventory products that are auto-consumed when this service is performed. Each entry contains `{ id, serviceId, itemId, quantity, item: { id, name, priceUsd, ... } }`.
+</ResponseField>
+
+---
+
+## `isBaseService` and Payroll Modes
+
+<Note>
+The `isBaseService` flag interacts with the company-level `commissionType` setting stored in `AutoLavado`:
+
+- **`FULL_PRICE` mode** — The entire price of every completed service contributes to the daily payroll pool.
+- **`BASE_SERVICE` mode** — Only services with `isBaseService: true` contribute to the payroll pool. Add-on services (wax, engine wash, etc.) are not counted. This prevents the system from double-counting when a full detail package is broken into individual line items.
+
+There can be **at most one** `isBaseService: true` service per vehicle type. The API will reject attempts to create or update a second base service for the same `typeCarId`.
+</Note>
+
+---
+
+## `ServiceResource` — Inventory Auto-Consumption
+
+<Note>
+Services can have linked inventory items via the `ServiceResource` join table. When a service is performed and its `ServiceOrder` is finalized, the linked items are **automatically deducted from stock**.
+
+For example, a "Lavado Completo" might link to 1 unit of "Ambientador Pino" — when the wash is marked as finished, one unit is consumed from the inventory.
+
+`ServiceResource` records are managed through the `resources` array in `POST /api/services` and `PUT /api/services/:id`. There is **no dedicated REST endpoint** for `ServiceResource` — resources are always managed as part of the parent service. The underlying data is accessible directly through Prisma/the database.
+</Note>
+
+---
+
+## Endpoints
+
+### `GET /api/services`
+
+Returns the full service catalog, ordered alphabetically by name. Each service includes its linked vehicle type and all associated `ServiceResource` inventory items. No authentication required.
+
+```bash
+curl http://localhost:3000/api/services
+```
+
+**Response `200 OK`:**
+
+```json
+[
+  {
+    "id": "uuid-lavado-basico",
+    "name": "Lavado Básico",
+    "description": "Lavado exterior de carrocería",
+    "priceUsd": 3.0,
+    "stimatedTimeMin": 20,
+    "isBaseService": true,
+    "typeCarId": "uuid-sedan",
+    "typeCar": { "id": "uuid-sedan", "name": "Sedán" },
+    "resources": [
+      {
+        "id": "uuid-resource",
+        "serviceId": "uuid-lavado-basico",
+        "itemId": "uuid-shampoo",
+        "quantity": 1,
+        "item": {
+          "id": "uuid-shampoo",
+          "name": "Shampoo Automotriz",
+          "priceUsd": 0.5,
+          "photo": null
+        }
+      }
+    ]
+  },
+  {
+    "id": "uuid-lavado-completo",
+    "name": "Lavado Completo",
+    "description": "Lavado de carrocería, aspirado y ambientador",
+    "priceUsd": 5.0,
+    "stimatedTimeMin": 45,
+    "isBaseService": false,
+    "typeCarId": null,
+    "typeCar": null,
+    "resources": []
+  }
+]
+```
+
+---
+
+### `POST /api/services` <Icon icon="lock" /> ADMIN
+
+Creates a new service entry in the catalog. Optionally accepts a `resources` array to pre-link inventory items that will be auto-consumed when this service is performed.
+
+```bash
+curl -X POST http://localhost:3000/api/services \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Lavado Completo",
+    "description": "Lavado de carrocería, aspirado y ambientador",
+    "priceUsd": 5.0,
+    "stimatedTimeMin": 45,
+    "typeCarId": "uuid-del-tipo",
+    "isBaseService": false
+  }'
+```
+
+**Request body:**
+
+<ParamField body="name" type="string" required>
+  Service name. Must be unique across the catalog.
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Descriptive text shown to customers and staff.
+</ParamField>
+
+<ParamField body="priceUsd" type="number" required>
+  Price in USD (e.g. `5.0`). Used in billing, sales, and payroll calculations.
+</ParamField>
+
+<ParamField body="stimatedTimeMin" type="number" required>
+  Estimated service duration in minutes (e.g. `45`). Used by the dynamic waiting-time algorithm.
+</ParamField>
+
+<ParamField body="typeCarId" type="string" required>
+  UUID of the vehicle type this service targets. Obtain valid UUIDs from `GET /api/typecars`. Even if the service applies to all vehicle types, a `typeCarId` must currently be provided (the field is required by the controller).
+</ParamField>
+
+<ParamField body="isBaseService" type="boolean">
+  Whether this is the base service for the given `typeCarId`. Defaults to `false`. Only one base service is allowed per vehicle type — the API rejects a second one.
+</ParamField>
+
+<ParamField body="resources" type="array">
+  Optional array of inventory items to auto-consume when this service is performed. Each element must be:
+  ```json
+  { "itemId": "uuid-del-item", "quantity": 1 }
+  ```
+</ParamField>
+
+**Response `201 Created`:**
+
+```json
+{
+  "id": "uuid",
+  "name": "Lavado Completo",
+  "description": "Lavado de carrocería, aspirado y ambientador",
+  "priceUsd": 5.0,
+  "stimatedTimeMin": 45,
+  "isBaseService": false,
+  "typeCarId": "uuid-del-tipo",
+  "typeCar": { "id": "uuid-del-tipo", "name": "Sedán" },
+  "resources": []
+}
+```
+
+**Error `500`** — Duplicate base service for the same vehicle type:
+
+```json
+{
+  "error": "Error al crear el servicio",
+  "message": "Ya existe un servicio base para este tipo de vehículo. Solo puede haber uno."
+}
+```
+
+<Warning>
+The `name` field is a **unique constraint** at the database level. Attempting to create two services with the same name will result in a Prisma unique constraint error returned as a `500` response.
+</Warning>
+
+---
+
+### `PUT /api/services/:id` <Icon icon="lock" /> ADMIN
+
+Updates an existing service. All body fields are optional — send only the fields you want to change.
+
+When `resources` is included in the update payload, the existing resource links are **fully replaced**: all prior `ServiceResource` records for this service are deleted and the new ones are inserted inside a single database transaction.
+
+```bash
+curl -X PUT http://localhost:3000/api/services/uuid-lavado-completo \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "priceUsd": 6.0,
+    "stimatedTimeMin": 50
+  }'
+```
+
+**Path parameters:**
+
+<ParamField path="id" type="string" required>
+  UUID of the service to update.
+</ParamField>
+
+**Request body (all fields optional):**
+
+<ParamField body="name" type="string">
+  New unique name for the service.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description text.
+</ParamField>
+
+<ParamField body="priceUsd" type="number">
+  New price in USD.
+</ParamField>
+
+<ParamField body="stimatedTimeMin" type="number">
+  New estimated duration in minutes.
+</ParamField>
+
+<ParamField body="typeCarId" type="string">
+  UUID of the new target vehicle type.
+</ParamField>
+
+<ParamField body="isBaseService" type="boolean">
+  Mark or unmark as the base service for its vehicle type. The API validates that no other service for the same `typeCarId` already has `isBaseService: true`.
+</ParamField>
+
+<ParamField body="resources" type="array">
+  Full replacement list of inventory resources. Passing an empty array `[]` removes all resource links. Each element:
+  ```json
+  { "itemId": "uuid-del-item", "quantity": 2 }
+  ```
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{
+  "id": "uuid-lavado-completo",
+  "name": "Lavado Completo",
+  "description": "Lavado de carrocería, aspirado y ambientador",
+  "priceUsd": 6.0,
+  "stimatedTimeMin": 50,
+  "isBaseService": false,
+  "typeCarId": "uuid-del-tipo",
+  "typeCar": { "id": "uuid-del-tipo", "name": "Sedán" },
+  "resources": []
+}
+```
+
+---
+
+### `DELETE /api/services/:id` <Icon icon="lock" /> ADMIN
+
+Permanently deletes a service from the catalog. The deletion is **blocked** if the service is referenced by any existing Service Order, Customer Order, or Reservation.
+
+```bash
+curl -X DELETE http://localhost:3000/api/services/uuid-lavado-completo \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+**Path parameters:**
+
+<ParamField path="id" type="string" required>
+  UUID of the service to delete.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{ "message": "Servicio eliminado exitosamente" }
+```
+
+**Error `400 Bad Request`** — Service is still in use:
+
+```json
+{ "error": "El servicio está en uso en Órdenes de Servicio" }
+```
+
+```json
+{ "error": "El servicio está en uso en Órdenes de Cliente" }
+```
+
+```json
+{ "error": "El servicio está en uso en Reservaciones" }
+```
+
+<Warning>
+A service cannot be deleted while it is referenced by any historical record. To retire a service from the active catalog without losing historical data, consider updating it with a descriptive name suffix (e.g. `"Lavado Básico [DESCONTINUADO]"`) rather than deleting it.
+</Warning>

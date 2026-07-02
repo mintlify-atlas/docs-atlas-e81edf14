@@ -1,0 +1,225 @@
+---
+title: "Deploy SCO Autolavados with Docker Compose"
+sidebarTitle: "Deployment"
+description: "Step-by-step guide to deploying SCO Autolavados using Docker Compose, including database setup, migrations, seeding, and verifying service health."
+---
+
+SCO Autolavados ships as a fully containerized application. All three tiers — the PostgreSQL database, the Express/Prisma backend, and the React/Vite frontend — run as isolated Docker Compose services that share a private internal network. A single `docker compose up --build` command brings the entire stack online, and a named Docker volume ensures your data survives container restarts and rebuilds.
+
+---
+
+## Docker Compose Services
+
+The `docker-compose.yml` at the repository root declares three services:
+
+### `sco_db` — PostgreSQL 15 Database
+
+| Property | Value |
+|---|---|
+| Image | `postgres:15` |
+| Container name | `sco_db` |
+| Internal hostname | `db` |
+| Credentials | Sourced from `DB_USER`, `DB_PASSWORD`, `DB_NAME` env vars |
+| Persistence | Named volume `postgres_data` → `/var/lib/postgresql/data` |
+| External ports | None (not exposed; only reachable by other services on the internal network) |
+
+The `postgres_data` volume is declared at the bottom of `docker-compose.yml` and persists independently of the container lifecycle. Removing the container does **not** delete your data unless you explicitly remove the volume.
+
+---
+
+### `sco_api` — Express Backend
+
+| Property | Value |
+|---|---|
+| Build context | `./backend` |
+| Container name | `sco_api` |
+| Exposed ports | `3000:3000` (API), `5555:51212` (Prisma Studio) |
+| Depends on | `sco_db` (database must start first) |
+| Volume mounts | `./backend:/usr/src/app` (live reload), anonymous mount for `node_modules` |
+| Key environment | `DATABASE_URL`, `CHOKIDAR_USEPOLLING=true` |
+| Working directory | `/usr/src/app/src` |
+| Start command | `npm run dev` → `tsx watch src/index.ts` |
+
+The backend Dockerfile installs dependencies, copies source files, runs `npx prisma generate`, and exposes port `3000`. In the current development configuration, the host `./backend` directory is mounted into the container so that `tsx watch` picks up file changes without requiring a rebuild.
+
+---
+
+### `sco_web` — React / Vite Frontend
+
+| Property | Value |
+|---|---|
+| Build context | `./frontend` |
+| Container name | `sco_web` |
+| Exposed ports | `5173:5173` |
+| Depends on | `sco_api` (backend must start first) |
+| Volume mounts | `./frontend:/app` (live reload), anonymous mount for `node_modules` |
+| Start command | `npm run dev -- --host` (Vite `--host` flag is required inside Docker to bind to `0.0.0.0`) |
+
+---
+
+## First-Time Deployment
+
+<Steps>
+  <Step title="Create your .env file">
+    Copy the example below to the repository root and fill in your credentials. All five required variables must be present before proceeding.
+
+    ```bash .env
+    DB_USER=sco_user
+    DB_PASSWORD=supersecret
+    DB_NAME=sco_db
+    DATABASE_URL=postgresql://sco_user:supersecret@db:5432/sco_db
+    JWT_SECRET=your-very-long-random-secret-here
+    ```
+
+    See the [Environment Variables reference](/configuration/environment) for a full explanation of each variable.
+  </Step>
+
+  <Step title="Build images and start all services">
+    Run the following command from the repository root. The `--build` flag ensures all three Docker images are compiled fresh. The `-d` flag runs the stack in detached (background) mode.
+
+    ```bash
+    docker compose up --build -d
+    ```
+
+    Docker Compose will pull `postgres:15`, build `./backend` and `./frontend`, create the `postgres_data` volume, and start all three containers in dependency order.
+  </Step>
+
+  <Step title="Run database migrations">
+    Once the containers are running, apply the Prisma migration history to create all tables in the `sco_db` database:
+
+    ```bash
+    docker compose exec backend npx prisma migrate deploy
+    ```
+
+    This command runs inside the `sco_api` container and executes all pending migrations in `backend/prisma/migrations` against the live PostgreSQL instance.
+  </Step>
+
+  <Step title="Seed initial data">
+    Populate the database with seed data (roles, default configuration, etc.):
+
+    ```bash
+    docker compose exec backend npx prisma db seed
+    ```
+
+    The seed script is defined in `backend/package.json` under the `prisma.seed` key. On first boot, `initializeApp()` in `src/index.ts` also creates the `AutoLavado` record automatically if none exists.
+  </Step>
+
+  <Step title="Verify services are healthy">
+    Confirm the API is responding by calling the AutoLavado configuration endpoint:
+
+    ```bash
+    curl http://localhost:3000/api/autolavado
+    ```
+
+    A successful response returns the `AutoLavado` entity JSON, confirming that the database connection, migrations, and seed data are all working correctly. The frontend is accessible at `http://localhost:5173`.
+  </Step>
+</Steps>
+
+---
+
+## Development vs Production
+
+The current `docker-compose.yml` is configured for **development**:
+
+- Host directories (`./backend`, `./frontend`) are bind-mounted into their respective containers so that `tsx watch` and Vite's HMR can detect file changes without rebuilding images.
+- Both `sco_api` and `sco_web` start their dev servers (`npm run dev`), not production-compiled builds.
+- `CHOKIDAR_USEPOLLING=true` is set on the backend to ensure file-watching works across Docker's virtualized filesystem layer.
+
+For **production**, you should:
+
+1. Remove the bind-mount volume entries from `docker-compose.yml` so containers run only the code baked into their images.
+2. Update the backend `Dockerfile` to run `npm run build` (TypeScript compilation) and change `CMD` to `npm start` (`node dist/index.js`).
+3. Update the frontend `Dockerfile` to run `npm run build` and serve the `dist/` output with a static file server such as Nginx.
+4. Set `NODE_ENV=production` and ensure `JWT_SECRET` is sourced from a secrets manager rather than a plain `.env` file.
+
+---
+
+## Updating the Application
+
+To deploy new code after the initial setup:
+
+<Steps>
+  <Step title="Pull the latest source code">
+    ```bash
+    git pull origin main
+    ```
+  </Step>
+
+  <Step title="Stop the running stack">
+    ```bash
+    docker compose down
+    ```
+
+    This stops and removes the containers but preserves the `postgres_data` volume and your data.
+  </Step>
+
+  <Step title="Rebuild images and restart">
+    ```bash
+    docker compose up --build -d
+    ```
+  </Step>
+
+  <Step title="Apply any new migrations">
+    ```bash
+    docker compose exec backend npx prisma migrate deploy
+    ```
+
+    Run this after every update that includes new Prisma migration files. It is safe to run even when there are no new migrations.
+  </Step>
+</Steps>
+
+---
+
+## Prisma Studio
+
+Prisma Studio provides a browser-based GUI for inspecting and editing database records. It is accessible at **`http://localhost:5555`** — Docker Compose maps host port `5555` to the container's internal port `51212`, where the studio process listens (as defined in the `studio` npm script: `npx prisma studio --browser none --port 51212`).
+
+To launch a Prisma Studio session manually:
+
+```bash
+docker compose exec backend npx prisma studio
+```
+
+<Info>
+  Prisma Studio is intended for development and debugging only. Restrict access to port `5555` in any environment where the host is reachable from the public internet.
+</Info>
+
+---
+
+## Common Commands
+
+```bash
+# Stream live logs from the backend container
+docker compose logs -f backend
+
+# Restart only the API service (without rebuilding)
+docker compose restart backend
+
+# Open a Prisma Studio session
+docker compose exec backend npx prisma studio
+
+# Open a psql session directly in the database container
+docker compose exec db psql -U sco_user -d sco_db
+
+# Reset the database — runs all migrations from scratch
+# WARNING: this destroys ALL data in the database
+docker compose exec backend npx prisma migrate reset
+
+# Check the status of all running containers
+docker compose ps
+```
+
+<Warning>
+  The `postgres_data` Docker volume is the sole source of truth for all your production data. Running `npx prisma migrate reset` **drops and recreates the entire database**, permanently destroying all records. Back up the volume before running any destructive commands in a production or staging environment.
+</Warning>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="gear" href="/configuration/environment">
+    Full reference for all `.env` variables required by the stack.
+  </Card>
+  <Card title="Multi-Currency Configuration" icon="dollar-sign" href="/configuration/multicurrency">
+    How exchange rates are fetched, stored, and applied to sales.
+  </Card>
+</CardGroup>

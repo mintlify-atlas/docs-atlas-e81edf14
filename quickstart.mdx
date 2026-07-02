@@ -1,47 +1,163 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with SCO Autolavados"
+sidebarTitle: "Quickstart"
+description: "Clone the repository, configure environment variables, run Docker Compose, and make your first authenticated API call in under 5 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through spinning up a complete SCO Autolavados environment on your local machine. By the end you will have all three services running — PostgreSQL database, Express API, and React frontend — with a seeded database and a working JWT token ready for API exploration.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Warning>
+  The server will **immediately exit at startup** if `JWT_SECRET` is not defined in your environment. Make sure this variable is set in your `.env` file before running `docker compose up`.
+</Warning>
 
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Steps
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Prerequisites">
+    Ensure the following tools are installed on your machine before proceeding.
+
+    | Tool | Minimum Version | Check Command |
+    |---|---|---|
+    | Docker | 24+ | `docker --version` |
+    | Docker Compose | 2.20+ | `docker compose version` |
+    | Git | 2.30+ | `git --version` |
 
     ```bash
-    npm install your-package
+    docker --version
+    docker compose version
+    git --version
+    ```
+
+    Docker Desktop for macOS and Windows bundles both Docker Engine and Docker Compose. On Linux, install Docker Compose v2 as a plugin separately.
+  </Step>
+
+  <Step title="Clone the Repository">
+    Clone the SCO Autolavados repository from GitHub and navigate into the project root.
+
+    ```bash
+    git clone https://github.com/Luisangelebp/SCO_Autolavados.git
+    cd SCO_Autolavados
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Configure Environment Variables">
+    The application requires several environment variables to be present before the containers start. Create a `.env` file in the project root (alongside `docker-compose.yml`).
 
     ```bash
-    your-cli init
+    touch .env
     ```
+
+    Populate it with the following values:
+
+    ```env
+    # PostgreSQL credentials — consumed by the `db` Docker Compose service
+    DB_USER=sco_user
+    DB_PASSWORD=supersecretpassword
+    DB_NAME=sco_autolavados
+
+    # Prisma / Backend connection string
+    # The host must be `db` (the Docker Compose service name), not `localhost`
+    DATABASE_URL=postgresql://sco_user:supersecretpassword@db:5432/sco_autolavados
+
+    # JWT secret used to sign and verify all authentication tokens
+    JWT_SECRET=replace_this_with_a_long_random_string
+    ```
+
+    **Variable reference:**
+
+    | Variable | Description |
+    |---|---|
+    | `DB_USER` | PostgreSQL superuser name, passed to the `sco_db` container |
+    | `DB_PASSWORD` | PostgreSQL password, passed to the `sco_db` container |
+    | `DB_NAME` | Name of the database to create inside PostgreSQL |
+    | `DATABASE_URL` | Full Prisma connection string; the host segment must be `db` (the Compose service name) |
+    | `JWT_SECRET` | Arbitrary secret string for JWT signing — the server exits if this is absent |
+
+    <Warning>
+      Never commit your `.env` file to version control. The repository's `.gitignore` should already exclude it, but double-check before pushing.
+    </Warning>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Start the Stack">
+    Build all images and start all three services in the foreground so you can watch the logs:
 
     ```bash
-    your-cli start
+    docker compose up --build
+    ```
+
+    Docker Compose will start the following services:
+
+    | Container | Image | Port(s) | Role |
+    |---|---|---|---|
+    | `sco_db` | `postgres:15` | *(not exposed externally)* | PostgreSQL 15 database with persistent `postgres_data` volume |
+    | `sco_api` | Custom (built from `./backend`) | `3000:3000`, `5555:51212` | Express REST API + Prisma Studio |
+    | `sco_web` | Custom (built from `./frontend`) | `5173:5173` | React/Vite frontend (depends on `sco_api`) |
+
+    Wait until you see the following line in the logs before proceeding:
+
+    ```
+    [server]: Servidor corriendo en http://localhost:3000
+    ```
+
+    <Tip>
+      Prisma Studio is exposed at **`http://localhost:5555`**. It maps to port `51212` inside the `sco_api` container (configured via the `5555:51212` port mapping in `docker-compose.yml`). You can use it to inspect and edit database records visually without writing SQL.
+    </Tip>
+  </Step>
+
+  <Step title="Run Database Migrations and Seed">
+    With the containers running, open a second terminal and apply the Prisma migration to create all tables, then seed the database with initial data (admin user, sample laundrer, and seed customer).
+
+    ```bash
+    # Apply all pending migrations
+    docker compose exec backend npx prisma migrate deploy
+
+    # Seed the database with initial data
+    docker compose exec backend npx prisma db seed
+    ```
+
+    A successful migration will print each applied migration name. The seed script creates the default `AutoLavado` configuration record, roles, and initial users so you can immediately start testing the full business flow.
+  </Step>
+
+  <Step title="Make Your First API Call">
+    Authenticate as the admin user to receive a JWT token. Use the seeded credentials:
+
+    ```bash
+    curl -X POST http://localhost:3000/api/users/login \
+      -H "Content-Type: application/json" \
+      -d '{"identifier": "admin", "password": "admin123"}'
+    ```
+
+    A successful response looks like this:
+
+    ```json
+    {
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "user": {
+        "id": "uuid",
+        "email": null,
+        "role": "ADMIN"
+      }
+    }
+    ```
+
+    Copy the `token` value and use it as a `Bearer` token in the `Authorization` header for all subsequent protected API requests:
+
+    ```bash
+    curl http://localhost:3000/api/service-orders \
+      -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     ```
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## What's Next?
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Now that your environment is running and you have an authenticated token, explore the core concepts and API reference:
+
+<CardGroup cols={2}>
+  <Card title="Users & Roles" icon="users" href="/features/users-and-roles">
+    Learn how the Admin, Customer, and Laundrer roles work, how accounts are created for each, and how JWT middleware enforces access control across all routes.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/overview">
+    Browse the full HTTP API — all endpoints, request bodies, response shapes, and authentication requirements across every module.
+  </Card>
+</CardGroup>

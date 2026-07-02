@@ -1,0 +1,100 @@
+---
+title: "Admin KPI Dashboard and Business Analytics"
+sidebarTitle: "Dashboard"
+description: "The SCO Autolavados admin dashboard exposes real-time KPIs including revenue balances, top customers, most-washed vehicle types, and service order metrics."
+---
+
+The admin dashboard is the financial and operational control center of SCO Autolavados. It aggregates data from across the platform — balance sheets, service order counts, laundrer activity, and rolling revenue trends — and surfaces them through a single KPI endpoint consumed by the `DashboardPage` in the React frontend. The dashboard gives the business owner a real-time picture of the day's performance at a glance.
+
+## KPI Endpoint
+
+```http
+GET /api/dashboard/kpis
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+This endpoint is **Admin-only** and requires a valid Bearer token. It computes all metrics server-side using the Venezuela timezone (VET, UTC-4) to ensure "today's" data reflects the local business day.
+
+**Response (200):**
+
+```json
+{
+  "balanceUsd": 245.50,
+  "balanceBs": 152761.00,
+  "todayIncomeUsd": 37.50,
+  "vehiclesAttendedToday": 8,
+  "activeLaundrersToday": 3,
+  "totalLaundrers": 4,
+  "weeklySales": [
+    { "date": "20/06", "incomeUsd": 28.00 },
+    { "date": "21/06", "incomeUsd": 42.50 },
+    { "date": "22/06", "incomeUsd": 15.00 },
+    { "date": "23/06", "incomeUsd": 55.00 },
+    { "date": "24/06", "incomeUsd": 37.00 },
+    { "date": "25/06", "incomeUsd": 20.00 },
+    { "date": "26/06", "incomeUsd": 37.50 }
+  ]
+}
+```
+
+## Available Metrics
+
+The KPI response covers the following business metrics:
+
+| Metric | Field | Description |
+|--------|-------|-------------|
+| USD Balance | `balanceUsd` | Current accumulated USD balance of the `AutoLavado` entity |
+| Bolívares Balance | `balanceBs` | Current accumulated Bs balance of the `AutoLavado` entity |
+| Today's Revenue | `todayIncomeUsd` | Sum of all `Sales.totalUsd` created today (VET) |
+| Vehicles Attended | `vehiclesAttendedToday` | Count of `ServiceOrders` with `state: "FINALIZADO"` and `timeEnd` today |
+| Active Laundrers | `activeLaundrersToday` | Count of laundrers with `isWorkingToday: true` |
+| Total Laundrers | `totalLaundrers` | Total laundrer records in the system (active or inactive) |
+| Weekly Sales Trend | `weeklySales` | Array of `{ date, incomeUsd }` for the last 7 calendar days |
+
+The **weekly sales trend** array is ordered from 6 days ago through today, with dates formatted as `DD/MM`. This data feeds directly into the revenue bar chart on the dashboard page.
+
+<Note>
+  The `balanceUsd` and `balanceBs` fields reflect the cumulative running balance on the `AutoLavado` record — they grow with approved payments and shrink with registered expenses. This is the primary cash-on-hand indicator, not a per-period aggregate.
+</Note>
+
+## Frontend Integration
+
+The React `DashboardPage` (`/dashboard`) consumes the `/api/dashboard/kpis` endpoint on mount and renders the following UI components:
+
+- **KPI cards** — Individual metric tiles for balance, today's income, and vehicles attended today
+- **Revenue bar chart** — Built with [Recharts](https://recharts.org/), visualizes `weeklySales` as a 7-day bar chart with `incomeUsd` on the Y-axis and `date` labels on the X-axis
+- **Active laundrer badge** — Displays `activeLaundrersToday / totalLaundrers` to show staffing coverage at a glance
+
+The frontend uses React Router's protected route wrapper (`ProtectedRoute`) to guard the dashboard — unauthenticated requests are automatically redirected to `/login`.
+
+## Exchange Rate Widget
+
+The dashboard also surfaces the current USD to Bolívares exchange rate, which is pulled from the `AutoLavado` configuration record and (when integrated) sourced from the Banco Central de Venezuela:
+
+```http
+GET /api/autolavado/exchange-rate
+```
+
+**Response (200):**
+
+```json
+{
+  "tasaBs": 622.21,
+  "lastUpdate": "2026-06-26T12:00:00.000Z"
+}
+```
+
+The `tasaBs` value is displayed in the dashboard header and is used as the default exchange rate when generating new sales invoices via `POST /api/sales` (`tazaUsd` field).
+
+<Tip>
+  For a complete daily closing report, combine `GET /api/dashboard/kpis` with `GET /api/payroll/daily?date=YYYY-MM-DD`. The dashboard gives you the revenue totals and the payroll endpoint gives you the commission breakdown — together they cover everything needed to close the day's books and pay the laundrers.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="Dashboard API Reference" icon="chart-bar" href="/api-reference/dashboard">
+    Full endpoint reference for the KPI dashboard endpoint including response schema.
+  </Card>
+  <Card title="AutoLavado API Reference" icon="gear" href="/api-reference/autolavado">
+    Configuration, exchange rate, balance, and wait-time endpoints for the AutoLavado entity.
+  </Card>
+</CardGroup>

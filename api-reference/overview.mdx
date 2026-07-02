@@ -1,0 +1,120 @@
+---
+title: "SCO Autolavados REST API Reference"
+sidebarTitle: "Overview"
+description: "Complete reference for the SCO Autolavados REST API. Base URL http://localhost:3000/api. All authenticated routes require a JWT Bearer token."
+---
+
+The **SCO Autolavados REST API** is a Node.js/Express/TypeScript backend that powers the full operations of Multiservicios La Miami — from vehicle reception and service orders through payments, inventory, payroll, and customer reservations. All functionality is exposed over HTTP as a RESTful JSON API with no versioning segment in the URL path; the current version is the only version.
+
+---
+
+## Base URL
+
+All endpoints are prefixed with `/api`. When running locally the server defaults to port `3000`.
+
+```
+http://localhost:3000/api
+```
+
+Set the `PORT` environment variable to override the default port. The server will refuse to start if `JWT_SECRET` is not set.
+
+---
+
+## Authentication
+
+Protected routes require a **JWT Bearer token** obtained from `POST /api/users/login`. Pass the token in every request to a guarded endpoint via the `Authorization` header:
+
+```
+Authorization: Bearer <your_token_here>
+```
+
+See the [Authentication guide](/api-reference/authentication) for the full login flow, token payload details, and error handling.
+
+---
+
+## Request Format
+
+| Scenario | Content-Type |
+|---|---|
+| JSON body (most endpoints) | `application/json` |
+| User photo upload (`PATCH /api/users/:id`, `POST /api/users/register`) | `multipart/form-data` |
+
+Requests that include a JSON body must set `Content-Type: application/json`. Requests that include a file upload must use `multipart/form-data`; the file field name is `photo`.
+
+---
+
+## Response Format
+
+All responses are JSON. The standard HTTP status codes used throughout the API are:
+
+| Status Code | Meaning |
+|---|---|
+| `200 OK` | Request succeeded; body contains the requested resource or update confirmation |
+| `201 Created` | Resource was successfully created; body contains the new resource |
+| `400 Bad Request` | Invalid input or business-rule violation (e.g. deleting a type that is in use) |
+| `401 Unauthorized` | Missing, malformed, or expired JWT token; or wrong login credentials |
+| `403 Forbidden` | Valid token but the authenticated role is not permitted for this action |
+| `404 Not Found` | Requested resource does not exist |
+| `500 Internal Server Error` | Unexpected server-side error |
+
+Error responses include an `error` string and, where applicable, a `message` field with extra detail:
+
+```json
+{
+  "error": "Acceso denegado. Token no proporcionado o formato incorrecto."
+}
+```
+
+---
+
+## Available Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Users" icon="users" href="/api-reference/users">
+    Registration, login, profile management, and role lookup.
+  </Card>
+  <Card title="Vehicles" icon="car" href="/api-reference/vehicles">
+    Vehicle types (`typecars`) and individual car registration by plate.
+  </Card>
+  <Card title="Services" icon="wrench" href="/api-reference/services">
+    Service catalogue — names, prices, and estimated durations.
+  </Card>
+  <Card title="Service Orders" icon="clipboard-list" href="/api-reference/service-orders">
+    Operational queue: create, assign to a launderer, and finish wash orders.
+  </Card>
+  <Card title="Inventory" icon="box" href="/api-reference/inventory">
+    Products (`items`) and stock management.
+  </Card>
+  <Card title="Payments" icon="credit-card" href="/api-reference/payments">
+    Record and approve customer payments across all payment methods.
+  </Card>
+  <Card title="Sales" icon="receipt" href="/api-reference/sales">
+    Finalized invoices linking payments, service orders, and products sold.
+  </Card>
+  <Card title="Reservations" icon="calendar" href="/api-reference/reservations">
+    Customer appointment scheduling with automatic queue enrollment.
+  </Card>
+  <Card title="Payroll" icon="money-bill" href="/api-reference/payroll">
+    Daily payroll calculation and launderer shift management.
+  </Card>
+  <Card title="AutoLavado Config" icon="building" href="/api-reference/autolavado">
+    Company profile, exchange rate, balance, and waiting-time estimate.
+  </Card>
+  <Card title="Dashboard" icon="chart-bar" href="/api-reference/dashboard">
+    Aggregated statistics for the admin dashboard.
+  </Card>
+</CardGroup>
+
+---
+
+## Role Authorization
+
+The API uses two middleware layers — `verifyToken` (validates the JWT) and `verifyRole` (checks the role claim inside it). Routes fall into three protection tiers:
+
+| Endpoint type | Required role |
+|---|---|
+| 🔒 ADMIN | JWT with `ADMIN` role |
+| 🔒 ADMIN / CUSTOMER | JWT with `ADMIN` **or** `CUSTOMER` role |
+| Public | No token required |
+
+Role comparison is case-insensitive. Calling a guarded route without a token returns `401`; calling it with a token that lacks the required role returns `403`.

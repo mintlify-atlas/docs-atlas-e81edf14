@@ -1,0 +1,178 @@
+---
+title: "Users, Roles, and Authentication in SCO Autolavados"
+sidebarTitle: "Users & Roles"
+description: "SCO Autolavados uses three roles — Admin, Customer, and Laundrer — each with distinct creation flows, permissions, and access levels enforced via JWT middleware."
+---
+
+SCO Autolavados enforces a strict role-based access control (RBAC) model across every layer of the platform. Three distinct roles govern what each actor can see and do — from full administrative control down to purely operational, credential-free laundrer records. Every protected API route validates the caller's role from a signed JWT before executing any business logic.
+
+## Role Overview
+
+<CardGroup cols={3}>
+  <Card title="Admin" icon="shield-halved">
+    Full system access. Can create any user type (Admin, Customer, or Laundrer). Manages the service queue, approves payments, views KPI dashboards, configures commission settings, and accesses all historical records. Admins can only be created by another Admin — there is no self-registration path for this role.
+  </Card>
+  <Card title="Customer" icon="user">
+    The end-user of the car wash. Can self-register online or be pre-registered at the physical counter by an Admin. Customers can create reservations, submit customer orders from the web portal, view their own service history, and update their own profile. A Customer cannot view or modify other users' data.
+  </Card>
+  <Card title="Laundrer" icon="car-wash">
+    Purely operational — no login credentials, no frontend access. Laundrer records exist to track shift hours, assign responsibility on service orders, and feed into the commission payroll pool. Created by Admin at the reception counter using the quick-registration endpoint.
+  </Card>
+</CardGroup>
+
+## User Creation Flows
+
+Two distinct flows handle user creation depending on the context: a quick counter flow for physical walk-ins and an online self-registration flow for customers who register themselves.
+
+### Admin / Counter Flow
+
+Used at the physical reception desk to register walk-in customers and laundrers rapidly — no email or password required, keeping the queue moving.
+
+```http
+POST /api/users/admin
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Juan",
+  "lastName": "Perez",
+  "roleId": "uuid-del-rol",
+  "cedula": "V12345678",
+  "phone": "04141234567"
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "id": "uuid",
+  "name": "Juan",
+  "lastName": "Perez",
+  "cedula": "V12345678",
+  "phone": "04141234567",
+  "email": null,
+  "hashPassword": null,
+  "status": true,
+  "createdAt": "2026-06-26T10:00:00.000Z"
+}
+```
+
+<Note>
+  The `cedula` field must start with `V`, `E`, `J`, or `G` (Venezuelan identity and tax ID formats). Submissions with any other prefix will be rejected with a validation error.
+</Note>
+
+### Online Self-Registration
+
+Customers can register themselves through the web portal using `POST /api/users/register`. The system first checks whether the provided `cedula` already exists in the database (meaning the customer was previously pre-registered at the counter by an Admin).
+
+- **If the cedula exists**: The account is *activated* — the existing record is updated with the new `email`, `user`, and hashed `password`. Name and phone data from the prior counter registration are preserved automatically.
+- **If the cedula does not exist**: A brand new Customer account is created from scratch.
+
+```http
+POST /api/users/register
+Content-Type: application/json
+```
+
+```json
+{
+  "cedula": "V12345678",
+  "name": "Juan",
+  "lastName": "Perez",
+  "phone": "04141234567",
+  "email": "juan@example.com",
+  "user": "juanperez",
+  "password": "mi_password_seguro"
+}
+```
+
+**Response (201):** The created or activated `User` object with `hashPassword` omitted.
+
+<Info>
+  All fields including `email`, `user`, and `password` are mandatory for the online registration flow. Accounts created at the counter that already have an `email` set are considered fully active and cannot be re-activated via this endpoint.
+</Info>
+
+## Authentication
+
+All protected routes require a Bearer token obtained from the login endpoint.
+
+```http
+POST /api/users/login
+Content-Type: application/json
+```
+
+```json
+{
+  "identifier": "juanperez",
+  "password": "mi_password_seguro"
+}
+```
+
+The `identifier` field accepts either the user's **email address** or their **username** (`user` field).
+
+**Response (200):**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "uuid",
+    "email": "juan@example.com",
+    "role": { "name": "Customer" }
+  }
+}
+```
+
+The access token expires in **15 minutes**. The refresh token is valid for **7 days** and can be exchanged for a new access token without requiring the user to log in again.
+
+<Warning>
+  The `JWT_SECRET` environment variable must be set in your backend `.env` file before starting the server. If absent, the application will throw an error when attempting to sign or verify tokens.
+</Warning>
+
+Use the token in subsequent requests:
+
+```http
+Authorization: Bearer <token>
+```
+
+**Error (401):** Returned for invalid credentials, unactivated accounts (no password set), or inactive users.
+
+## Cedula Auto-Complete
+
+To improve the registration UX on the frontend, the system exposes a cedula lookup endpoint that the `RegisterPage` uses to pre-fill the form when a customer was previously registered at the counter.
+
+```http
+GET /api/users/check/:cedula
+```
+
+- **Response (200):** Returns the user's basic data (`name`, `lastName`, `phone`) if the cedula exists in the database without an active email.
+- **Response (404):** Cedula not found — the user will be created from scratch.
+
+The frontend registration form calls this endpoint as the user types their cedula. If a match is found, the `name`, `lastName`, and `phone` fields are filled in automatically and the customer only needs to enter their `email` and `password` to complete activation.
+
+## Photo Upload
+
+The `PATCH /api/users/:id` endpoint supports profile photo uploads via `multipart/form-data`. Multer middleware handles the file parsing on the server side.
+
+```http
+PATCH /api/users/:id
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+name=Juan
+lastName=Perez
+photo=<binary file>
+```
+
+Uploaded photos are stored in the `/uploads` directory on the server and served as static assets. The `photo` field on the `User` record stores the relative path to the file.
+
+<Note>
+  An Admin can update any user's profile. A Customer can only update their own profile — the middleware validates that `req.user.id === params.id` for Customer-role requests.
+</Note>
+
+<Card title="Users API Reference" icon="code" href="/api-reference/users">
+  Full endpoint reference for all user and role management endpoints, including request/response schemas and error codes.
+</Card>

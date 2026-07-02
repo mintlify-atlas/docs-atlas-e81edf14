@@ -1,0 +1,439 @@
+---
+title: "Vehicles (Cars) API Endpoints"
+sidebarTitle: "Vehicles"
+description: "REST endpoints for managing vehicles and vehicle types in SCO Autolavados — register, search by plate, update, and manage type categories."
+---
+
+## Overview
+
+The Vehicles API is split into two resource groups:
+
+- **Vehicle Types (`/typecars`)** — Category definitions such as Sedán, Camioneta, or Moto. Each car and each service is linked to a vehicle type.
+- **Cars (`/cars`)** — Individual vehicles registered in the system, linked to an owner (User) and a vehicle type.
+
+<Note>
+When a `CUSTOMER` role creates a car via `POST /api/cars`, the server **automatically forces** `ownerId` to match the authenticated user's own ID, regardless of what value is sent in the request body. Only an `ADMIN` can assign a car to an arbitrary owner.
+</Note>
+
+---
+
+## Car Object
+
+```json
+{
+  "id": "uuid",
+  "plate": "ABC12D",
+  "mark": "Toyota",
+  "model": "Corolla",
+  "color": "Blanco",
+  "year": 2020,
+  "comment": null,
+  "createdAt": "2026-06-01T10:00:00.000Z",
+  "ownerId": "uuid",
+  "owner": {
+    "id": "uuid",
+    "name": "Juan",
+    "lastName": "Pérez"
+  },
+  "typeCarId": "uuid",
+  "typeCar": { "id": "uuid", "name": "Sedán" }
+}
+```
+
+<ResponseField name="id" type="string">
+  UUID primary key.
+</ResponseField>
+
+<ResponseField name="plate" type="string">
+  License plate — unique across the system (e.g. `ABC12D`).
+</ResponseField>
+
+<ResponseField name="mark" type="string">
+  Vehicle brand / manufacturer (e.g. `Toyota`, `Ford`).
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  Vehicle model name (e.g. `Corolla`, `Ranger`).
+</ResponseField>
+
+<ResponseField name="color" type="string">
+  Vehicle color.
+</ResponseField>
+
+<ResponseField name="year" type="number | null">
+  Model year. Optional — may be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="comment" type="string | null">
+  Free-text notes about the vehicle (e.g. special instructions for the wash crew).
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (ISO 8601)">
+  Timestamp of when the vehicle was registered.
+</ResponseField>
+
+<ResponseField name="ownerId" type="string">
+  UUID of the owning User.
+</ResponseField>
+
+<ResponseField name="owner" type="object">
+  Embedded subset of the owner User object: `{ id, name, lastName, ... }`.
+</ResponseField>
+
+<ResponseField name="typeCarId" type="string">
+  UUID of the associated TypeCar category.
+</ResponseField>
+
+<ResponseField name="typeCar" type="object">
+  Embedded TypeCar object: `{ id, name }`.
+</ResponseField>
+
+---
+
+## Vehicle Types (TypeCars)
+
+### `GET /api/typecars`
+
+Returns the full list of registered vehicle type categories. No authentication required.
+
+```bash
+curl http://localhost:3000/api/typecars
+```
+
+**Response `200 OK`:**
+
+```json
+[
+  { "id": "uuid-sedan", "name": "Sedán" },
+  { "id": "uuid-truck", "name": "Camioneta" },
+  { "id": "uuid-moto",  "name": "Moto" }
+]
+```
+
+<ResponseField name="id" type="string">
+  UUID of the vehicle type. Use this as `typeCarId` when registering a car or creating a service.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Human-readable category name. Unique across the system.
+</ResponseField>
+
+---
+
+### `POST /api/typecars` <Icon icon="lock" /> ADMIN
+
+Creates a new vehicle type category.
+
+```bash
+curl -X POST http://localhost:3000/api/typecars \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "Sedán" }'
+```
+
+**Request body:**
+
+<ParamField body="name" type="string" required>
+  Name of the new vehicle type. Must be unique (e.g. `Sedán`, `Camioneta`, `SUV`, `Moto`).
+</ParamField>
+
+**Response `201 Created`:**
+
+```json
+{ "id": "uuid-sedan", "name": "Sedán" }
+```
+
+---
+
+### `PUT /api/typecars/:id` <Icon icon="lock" /> ADMIN
+
+Updates the name of an existing vehicle type.
+
+```bash
+curl -X PUT http://localhost:3000/api/typecars/uuid-sedan \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "Sedán / Coupé" }'
+```
+
+**Path parameters:**
+
+<ParamField path="id" type="string" required>
+  UUID of the vehicle type to update.
+</ParamField>
+
+**Request body:**
+
+<ParamField body="name" type="string" required>
+  New name for the vehicle type.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{ "id": "uuid-sedan", "name": "Sedán / Coupé" }
+```
+
+---
+
+### `DELETE /api/typecars/:id` <Icon icon="lock" /> ADMIN
+
+Permanently deletes a vehicle type. The deletion is **blocked** if any cars or services are currently linked to this type.
+
+```bash
+curl -X DELETE http://localhost:3000/api/typecars/uuid-sedan \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+**Path parameters:**
+
+<ParamField path="id" type="string" required>
+  UUID of the vehicle type to delete.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{ "message": "Tipo de vehículo eliminado exitosamente" }
+```
+
+**Error `400 Bad Request`** — Type is still in use:
+
+```json
+{
+  "error": "No se puede eliminar el tipo de vehículo porque hay vehículos registrados con este tipo"
+}
+```
+
+```json
+{
+  "error": "No se puede eliminar el tipo de vehículo porque hay servicios asociados a este tipo"
+}
+```
+
+<Warning>
+Always reassign or remove all Cars and Services linked to a TypeCar before attempting to delete it. The API performs both checks before proceeding with the deletion.
+</Warning>
+
+---
+
+## Cars
+
+### `GET /api/cars`
+
+Returns all registered vehicles, ordered by most recently created. Each car includes its full owner and type details. No authentication required.
+
+```bash
+curl http://localhost:3000/api/cars
+```
+
+**Response `200 OK`:**
+
+```json
+[
+  {
+    "id": "uuid",
+    "plate": "ABC12D",
+    "mark": "Toyota",
+    "model": "Corolla",
+    "color": "Blanco",
+    "year": 2020,
+    "comment": null,
+    "createdAt": "2026-06-01T10:00:00.000Z",
+    "ownerId": "uuid",
+    "owner": {
+      "id": "uuid",
+      "name": "Juan",
+      "lastName": "Pérez"
+    },
+    "typeCarId": "uuid",
+    "typeCar": { "id": "uuid", "name": "Sedán" }
+  }
+]
+```
+
+---
+
+### `GET /api/cars/:plate`
+
+Looks up a single vehicle by its license plate. Useful for the reception desk auto-fill flow when a returning customer arrives.
+
+```bash
+curl http://localhost:3000/api/cars/ABC12D
+```
+
+**Path parameters:**
+
+<ParamField path="plate" type="string" required>
+  Exact license plate string to look up (e.g. `ABC12D`). The lookup is **exact-match** — case and formatting must match what was used at registration.
+</ParamField>
+
+**Response `200 OK`:**
+
+```json
+{
+  "id": "uuid",
+  "plate": "ABC12D",
+  "mark": "Toyota",
+  "model": "Corolla",
+  "color": "Blanco",
+  "year": 2020,
+  "comment": null,
+  "createdAt": "2026-06-01T10:00:00.000Z",
+  "ownerId": "uuid",
+  "owner": {
+    "id": "uuid",
+    "name": "Juan",
+    "lastName": "Pérez"
+  },
+  "typeCarId": "uuid",
+  "typeCar": { "id": "uuid", "name": "Sedán" }
+}
+```
+
+**Response `404 Not Found`:**
+
+```json
+{ "error": "Vehículo no encontrado" }
+```
+
+---
+
+### `POST /api/cars` <Icon icon="lock" /> Any authenticated user
+
+Registers a new vehicle. Requires a valid JWT token from any role.
+
+```bash
+curl -X POST http://localhost:3000/api/cars \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plate": "ABC12D",
+    "mark": "Toyota",
+    "model": "Corolla",
+    "color": "Blanco",
+    "year": 2020,
+    "ownerId": "uuid-del-usuario",
+    "typeCarId": "uuid-del-tipo",
+    "comment": "Especial atención en los rines"
+  }'
+```
+
+**Request body:**
+
+<ParamField body="plate" type="string" required>
+  License plate string. Must be unique across the system. Any duplicate will be rejected with a `400` error.
+</ParamField>
+
+<ParamField body="mark" type="string" required>
+  Vehicle brand / manufacturer name.
+</ParamField>
+
+<ParamField body="model" type="string" required>
+  Vehicle model name.
+</ParamField>
+
+<ParamField body="color" type="string" required>
+  Vehicle color.
+</ParamField>
+
+<ParamField body="year" type="number">
+  Model year as an integer (e.g. `2020`). Optional.
+</ParamField>
+
+<ParamField body="ownerId" type="string" required>
+  UUID of the user who owns this vehicle. **Ignored for `CUSTOMER` role** — the server substitutes their own authenticated user ID automatically.
+</ParamField>
+
+<ParamField body="typeCarId" type="string" required>
+  UUID of the vehicle type category. Obtain valid UUIDs from `GET /api/typecars`.
+</ParamField>
+
+<ParamField body="comment" type="string">
+  Optional free-text note (e.g. special wash instructions). Optional.
+</ParamField>
+
+**Response `201 Created`:**
+
+```json
+{
+  "id": "uuid",
+  "plate": "ABC12D",
+  "mark": "Toyota",
+  "model": "Corolla",
+  "color": "Blanco",
+  "year": 2020,
+  "comment": "Especial atención en los rines",
+  "createdAt": "2026-06-01T10:00:00.000Z",
+  "ownerId": "uuid-del-usuario",
+  "typeCarId": "uuid-del-tipo"
+}
+```
+
+**Error `400 Bad Request`** — Plate already exists:
+
+```json
+{ "error": "Ya existe un vehículo registrado con esta placa" }
+```
+
+<Tip>
+Before registering a new vehicle at the reception desk, call `GET /api/cars/:plate` first to check whether it already exists in the system and avoid duplicate registration errors.
+</Tip>
+
+---
+
+### `PUT /api/cars/:id` <Icon icon="lock" /> Any authenticated user
+
+Updates one or more fields of an existing vehicle record.
+
+```bash
+curl -X PUT http://localhost:3000/api/cars/uuid-del-vehiculo \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "color": "Negro",
+    "comment": "Llantas recién pintadas — no usar presión alta"
+  }'
+```
+
+**Path parameters:**
+
+<ParamField path="id" type="string" required>
+  UUID of the vehicle to update.
+</ParamField>
+
+**Request body (all fields optional — send only those you want to change):**
+
+<ParamField body="plate" type="string">
+  New license plate (must remain unique).
+</ParamField>
+
+<ParamField body="mark" type="string">
+  New brand / manufacturer.
+</ParamField>
+
+<ParamField body="model" type="string">
+  New model name.
+</ParamField>
+
+<ParamField body="color" type="string">
+  New color.
+</ParamField>
+
+<ParamField body="year" type="number">
+  New model year.
+</ParamField>
+
+<ParamField body="comment" type="string">
+  Updated notes.
+</ParamField>
+
+<ParamField body="ownerId" type="string">
+  UUID of the new owner (transfer ownership).
+</ParamField>
+
+<ParamField body="typeCarId" type="string">
+  UUID of the new vehicle type category.
+</ParamField>
+
+**Response `200 OK`:** Updated Car object.
